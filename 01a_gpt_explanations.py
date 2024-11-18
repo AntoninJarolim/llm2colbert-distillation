@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime
 from math import inf
+from os import write
 
 from jsonlines import jsonlines
 from openai import OpenAI
@@ -115,7 +116,7 @@ def create_batch_file(starting_id, data_chunk, api, generated_data_dir):
     https://platform.openai.com/docs/guides/batch/getting-started
     """
 
-    jsonl_filename, task_writer = init_writer(starting_id, len(data_chunk), generated_data_dir)
+    jsonl_filename, task_writer = init_writer(starting_id, starting_id + len(data_chunk), generated_data_dir)
 
     for i, d in tqdm(enumerate(data_chunk), desc="Dialogs"):
         message = messages_for_passages(d["query"], d["positive"], api)
@@ -212,7 +213,7 @@ def sleep_with_progress(seconds, description=None):
         time.sleep(1)
 
 
-def read_input_data(file_path='data/29_random_samples_explained.jsonl'):
+def read_input_data(file_path='data/29_random_samples.jsonl'):
     with open(file_path, 'r') as f:
         data = [json.loads(line) for line in f]
     return data
@@ -251,6 +252,7 @@ def get_all_responses(generated_data_dir):
 
     # Create new list by sorting with keys - rowid, needed to match input
     responses_out = [responses[row_id] for row_id in responses.keys()]
+    responses_out = [json.loads(r) for r in responses_out]
     return responses_out
 
 
@@ -293,6 +295,18 @@ def generate_all_batches(from_sample, to_sample, batch_step, generation_api, gen
                             description="Waiting before sending new batch file.")
 
 
+def write_output(responses_out, output_data_file):
+    input_data = read_input_data()
+    with jsonlines.open(output_data_file, mode='w') as writer:
+        for input_data, out_selected in zip(input_data, responses_out):
+            writer.write(
+                {
+                    **input_data,
+                    'selected_spans': out_selected['spans']
+                }
+            )
+
+
 def main():
     args = get_args()
 
@@ -308,13 +322,13 @@ def main():
                              generated_data_dir
                              )
 
+    responses_out = get_all_responses(generated_data_dir)
+
     # Remove file if exists
     output_data_file = f"data/29_random_samples_{args.model_name}.jsonl"
+    print(f"Saving output data to {output_data_file}")
     silent_remove(output_data_file)
-
-    responses_out = get_all_responses(generated_data_dir)
-    with jsonlines.open(output_data_file, mode='w') as writer:
-        writer.write_all(responses_out)
+    write_output(responses_out, output_data_file)
 
 if __name__ == "__main__":
     main()
