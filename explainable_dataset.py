@@ -55,7 +55,8 @@ def find_span_start_index(self, text, span: str):
     """
     Find span sub-sequence in text and return text-wise indexes
     """
-    assert type(span) is str
+    if not type(span) is str:
+        raise AssertionError("Invalid generated data structure.")
 
     text_len = len(text)
     span_len = len(span)
@@ -170,7 +171,9 @@ class ExplanationsDataset(Dataset):
 if __name__ == "__main__":
     # Example usage
     # file_path = 'data/29_random_samples_explained.jsonl'
-    file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
+    # file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
+    # file_path = 'data/29_random_samples_gpt-4o-mini-2024-07-18.jsonl'
+    file_path = 'data/29_random_samples_gpt-4o-2024-08-06.jsonl'
 
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
     dataset = ExplanationsDataset(file_path, tokenizer, decode_positive_as_list=True)

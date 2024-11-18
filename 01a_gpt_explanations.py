@@ -6,10 +6,14 @@ from datetime import datetime
 from math import inf
 from os import write
 
+from PIL.PdfParser import encode_text
 from jsonlines import jsonlines
+from numpy.distutils.fcompiler import failed_fcompilers
 from openai import OpenAI
+from pydantic.v1.errors import IterableError
 from sympy.physics.units import action
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from explainable_dataset import ExplanationsDataset
 from llama_explanations import create_message
@@ -307,6 +311,22 @@ def write_output(responses_out, output_data_file):
             )
 
 
+def find_invalid_samples(output_data_file):
+
+    tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
+    dataset = ExplanationsDataset(output_data_file, tokenizer, decode_positive_as_list=True)
+    index = 0
+    failed_indexes = []
+    for i in range(len(dataset)):
+        try:
+            dataset[i]
+        except AssertionError:
+            failed_indexes.append(index)
+        index += 1
+    return failed_indexes
+
+
+
 def main():
     args = get_args()
 
@@ -329,6 +349,11 @@ def main():
     print(f"Saving output data to {output_data_file}")
     silent_remove(output_data_file)
     write_output(responses_out, output_data_file)
+
+    while (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file))) > 0:
+        print(f"Current version has {invalid_len} samples. Trying to fix following indexes.")
+        print(invalid_samples)
+        break
 
 if __name__ == "__main__":
     main()
