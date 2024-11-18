@@ -6,6 +6,12 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 
+def tokenize_list(tokens, tokenizer):
+    token_list = []
+    for t in tokens.tolist():
+        token_list.append(tokenizer.decode(t))
+    return token_list
+
 
 def split_by_spans(text, spans):
     spans = sorted(spans, key=lambda x: x['start'])
@@ -45,10 +51,11 @@ def split_by_spans(text, spans):
     return result
 
 
-def find_span_start_index(self, text, span):
+def find_span_start_index(self, text, span: str):
     """
     Find span sub-sequence in text and return text-wise indexes
     """
+    assert type(span) is str
 
     text_len = len(text)
     span_len = len(span)
@@ -64,7 +71,8 @@ def find_span_start_index(self, text, span):
 
 class ExplanationsDataset(Dataset):
 
-    def __init__(self, file_path, tokenizer):
+    def __init__(self, file_path, tokenizer, decode_positive_as_list=False):
+        self.decode_positive_as_list = decode_positive_as_list
         self.tokenizer = tokenizer
         self.file_path = file_path
         # Load the entire JSONL file into memory
@@ -85,12 +93,14 @@ class ExplanationsDataset(Dataset):
         sample = self.data[idx]
         selected_spans = sample['selected_spans']
         tokenized_positive, rationales = self.tokenize_with_spans(sample['positive'], selected_spans)
+
         return {
             'query': sample['query'],
             'positive': sample['positive'],
             'negative': sample['negative'],
             'tokenized_negative': self.encode_text(sample['negative']),
             'tokenized_positive': tokenized_positive,
+            'tokenized_positive_decoded': self.decode_list(tokenized_positive),
             'rationales': rationales,
             'selected_spans': sample['selected_spans']
         }
@@ -99,8 +109,12 @@ class ExplanationsDataset(Dataset):
         explanation = []
 
         start_find = 0
+        if isinstance(selected_spans[0], dict):
+            selected_spans = [span['text'] for span in selected_spans]
         for span in selected_spans:
             span_start = find_span_start_index(self, text[start_find:], span)
+            if span_start == -1:
+                continue
             span_length = len(span)
             # explanation[start_find + span_start:span_length] = 1
             explanation.append(
@@ -114,11 +128,16 @@ class ExplanationsDataset(Dataset):
         return explanation
 
     def encode_text(self, text):
+        if text == " ":
+            # tokenizer discards just space
+            if self.tokenizer.decode(self.tokenizer.encode(" ", add_special_tokens=False,)) == "":
+                return torch.tensor([6])
+
         return self.tokenizer.encode(
             text,
             return_tensors="pt",
             add_special_tokens=False,
-        )[0]
+        ).flatten()
 
     def tokenize_with_spans(self, text, span_strings):
         found_spans = self.find_spans(text, span_strings)
@@ -140,12 +159,24 @@ class ExplanationsDataset(Dataset):
         assert len(encoded_spans) == len(label_tensors)
         return encoded_spans, label_tensors
 
-# Example usage
-file_path = 'data/30_random_samples_explained.jsonl'
-tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
-dataset = ExplanationsDataset(file_path, tokenizer)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False)  # shuffle=False to disable randomization
+    def decode_list(self, tokens):
+        return (
+            tokenize_list(tokens, self.tokenizer)
+            if self.decode_positive_as_list
+            else None
+        )
 
-# Iterate through the data
-for batch in dataloader:
-    print(batch)
+
+if __name__ == "__main__":
+    # Example usage
+    # file_path = 'data/29_random_samples_explained.jsonl'
+    file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
+
+    tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
+    dataset = ExplanationsDataset(file_path, tokenizer, decode_positive_as_list=True)
+    print(dataset[1])
+
+    # Iterate through the data
+    for i in range(len(dataset)):
+        d = dataset[i]
+        print(d)

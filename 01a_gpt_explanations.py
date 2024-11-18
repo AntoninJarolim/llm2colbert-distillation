@@ -3,15 +3,30 @@ import json
 import os
 import time
 from datetime import datetime
+from math import inf
 
 from jsonlines import jsonlines
 from openai import OpenAI
+from sympy.physics.units import action
 from tqdm import tqdm
+
+from explainable_dataset import ExplanationsDataset
+from llama_explanations import create_message
 
 
 class OpenAIGenerator:
-    def __init__(self):
-        self.client = OpenAI()
+    def __init__(self, model_name, use_ollama=False):
+        if use_ollama:
+            print("Using ollama instead of openAI api")
+            self.client = OpenAI(
+                base_url='http://athena20.fit.vutbr.cz:11434/v1',
+                api_key='ollama',
+            )
+            self.model = 'ollama'
+        else:
+            self.client = OpenAI()
+            self.model = model_name # self.model = "gpt-4o-2024-08-06" "gpt-4o-mini"
+
         self.temperature = 0.2
         self.max_tokens = 1024
         self.top_p = 1
@@ -42,7 +57,7 @@ class OpenAIGenerator:
             message = self.create_message(message)
 
         return dict(
-            model="gpt-4o-2024-08-06",
+            model=self.model,
             messages=message,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -75,81 +90,40 @@ def turns_for_gpt(turns):
 
 def task_from_prompt(custom_id, prompt):
     return {
-        "custom_id": f"{custom_id}",
+        "custom_id": custom_id,
         "method": "POST",
         "url": "/v1/chat/completions",
         "body": prompt
     }
 
 
-def messages_for_passages(turns, diag_passages, openai_api, nr_passages=16):
-    turns_str = json.dumps(turns, indent=4)
-    messages = []
-    for psg_id in tqdm(range(nr_passages), desc="Passages"):
-        psg_text = diag_passages[psg_id]["passage"]
-        prompt_str = (
-            "You will be presented with a dialogue in json format followed by partially relevant text. Your task is "
-            "to select spans containing answer to the last question based on entire dialogue history from that text. "
-            "You may select multiple spans if needed, but ensure that the selected sections do not overlap. "
-            "Try to not select entire sentences, but only fine-grained spans."
-            "If there is reference (e.g. [1]) in the text, you must include it in the span."
-            "Do not correct or modify the text: "
-            "Include all grammatical and syntactic errors from the original text, "
-            "do not remove senseless spaces or punctuation."
-            "Return json_object with key 'spans' and list of selected spans as value. "
-            "\n"
-            "Dialogue history:"
-            f"{turns_str}\n"
-            "\n"
-            "Text to select spans from:"
-            f"{psg_text}"
-        )
-        api_message = openai_api.create_api_call_dict(prompt_str)
-        messages.append(api_message)
-    return messages
+def messages_for_passages(query, passage, openai_api):
+    prompt_str = create_message(query, passage)
+    api_message = openai_api.create_api_call_dict(prompt_str)
+    return api_message
 
 
-def init_writer(dialogue_id_from, dialogue_id_to):
+def init_writer(id_from, id_to, generated_data_dir):
     time_str = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-    jsonl_filename = f"openAI_batches/{time_str}_batch-{dialogue_id_from}-{dialogue_id_to}.jsonl"
-    return jsonl_filename, jsonlines.Writer(open(jsonl_filename, "a"))
+    jsonl_filename = f"{generated_data_dir}/{time_str}_batch-{id_from}-{id_to}.jsonl"
+    return jsonl_filename, jsonlines.Writer(open(jsonl_filename, "w"))
 
 
-def create_batch_file(dialogue_id_from, dialogue_id_to):
+def create_batch_file(starting_id, data_chunk, api, generated_data_dir):
     """
-    Create batch file for a range of dialogues in a jsonl format, which is suitable for OpenAI API.
+    Create batch file for a range of ids in a jsonl format, which is suitable for OpenAI API.
     https://platform.openai.com/docs/guides/batch/getting-started
-    :param dialogue_id_from: start index of the batch
-    :param dialogue_id_to: end index of the batch
-    :return: None, but jsonl file is created
     """
-    cross_encoder, tokenizer = init_model()
-    offline_inference = InferenceDataProvider(cross_encoder, tokenizer)
-    openai_api = OpenAIGenerator()
-    jsonl_filename, task_writer = init_writer(dialogue_id_from, dialogue_id_to)
-    data = get_data()
 
-    batch_psg_ids = offline_inference.get_valid_dialog_ids()[dialogue_id_from:dialogue_id_to]
-    for dialogue_id in tqdm(batch_psg_ids, desc="Dialogs"):
+    jsonl_filename, task_writer = init_writer(starting_id, len(data_chunk), generated_data_dir)
 
-        # Get next dialogue data
-        last_loaded_example = data[dialogue_id]
-        print(f"Generating for dialogue id {dialogue_id}")
-        diag_turns, grounded_agent_utterance, nr_show_utterances, diag_passages = \
-            get_current_dialog(last_loaded_example)
-        turns = turns_for_gpt(diag_turns[:nr_show_utterances])
+    for i, d in tqdm(enumerate(data_chunk), desc="Dialogs"):
+        message = messages_for_passages(d["query"], d["positive"], api)
 
-        # Rerank passages based on inference sorted indexes
-        inf_out = offline_inference.get_dialog_inference_out(dialogue_id)
-        diag_passages = [diag_passages[i] for i in inf_out["sorted_indexes"]]
-        messages = messages_for_passages(turns, diag_passages, openai_api)
-
-        # Create sub-batch of passages for the dialogue
+        # Create sub-batch
         tasks = []
-        for id_m, message in enumerate(messages):
-            diag_psg_id = f"{dialogue_id}_{id_m}"
-            task = task_from_prompt(diag_psg_id, message)
-            tasks.append(task)
+        task = task_from_prompt(f"row_{starting_id + i}", message)
+        tasks.append(task)
 
         # Append tasks to the file
         task_writer.write_all(tasks)
@@ -182,7 +156,7 @@ def create_batch_job(batch_filename):
     return batch.id
 
 
-def get_output_batch(batch_id):
+def download_output_batch(batch_id):
     client = OpenAI()
     batch = client.batches.retrieve(batch_id)
 
@@ -191,7 +165,8 @@ def get_output_batch(batch_id):
         print(f"Batch is not completed yet - status is {batch.status}")
         if batch.status == "failed":
             raise Exception(f"Batch failed: {batch}")
-        sleep_with_progress(15)
+        sleep_with_progress(15,
+                            description="Waiting for validation")
         batch = client.batches.retrieve(batch_id)
 
     print("Batch is completed")
@@ -229,116 +204,117 @@ def messages_from_file(batch_filename):
     return messages
 
 
-def process_output(batch_filename, refresh_metadata=True):
-    cross_encoder, tokenizer = init_model()
-    messages = messages_from_file(batch_filename)
-    data = get_data()
-    offline_inference = InferenceDataProvider(cross_encoder, tokenizer)
+def sleep_with_progress(seconds, description=None):
+    if description is None:
+        description = "Waiting"
 
-    for message in messages:
-        dialogue_id, sorted_passage_id = message["id"].split("_")
-        dialogue_id = int(dialogue_id)
-
-        # Get reranked passage indexes because passage_id from "custom_id" is from reranked list
-        sorted_psg_indexes = offline_inference.get_dialog_inference_out(dialogue_id)["sorted_indexes"]
-        real_psg_id = sorted_psg_indexes[int(sorted_passage_id)]
-
-        # Result not generated for all passages therefore gpt_references is dict
-        # where key is real_psg_id and value is list of gpt selected spans
-        real_psg_id = str(int(real_psg_id))
-        if "gpt_references" not in data[dialogue_id]:
-            data[dialogue_id]["gpt_references"] = {}
-
-        messages = [
-            {
-                "ref_span": span,
-            }
-            for span in message["spans"]
-        ]
-        data[dialogue_id]["gpt_references"][real_psg_id] = messages
-
-    json.dump(data, open(EXAMPLE_VALIDATION_DATA, "w"), indent=4)
-    from_id, to_id = batch_filename.split("_batch-")[1].strip("_output.jsonl").split("-")
-    generate_offline_data(int(from_id), int(to_id), refresh_metadata=refresh_metadata)
-
-
-def asdf():
-    data = get_data()
-    for diag_id in range(200):
-        if "gpt_references" in data[diag_id]:
-            if isinstance(data[diag_id]["gpt_references"], list):
-                del data[diag_id]["gpt_references"]
-    json.dump(data, open(EXAMPLE_VALIDATION_DATA, "w"), indent=4)
-
-
-def sleep_with_progress(seconds):
-    for _ in tqdm(range(seconds), desc="Waiting", unit="s"):
+    for _ in tqdm(range(seconds), desc=description, unit="s"):
         time.sleep(1)
 
 
-if __name__ == "__main__":
+def read_input_data(file_path='data/29_random_samples_explained.jsonl'):
+    with open(file_path, 'r') as f:
+        data = [json.loads(line) for line in f]
+    return data
+
+
+def silent_remove(output_data_file):
+    try:
+        os.remove(output_data_file)
+    except OSError:
+        pass
+
+
+def process_output(process_file):
+    responses = {}
+    with open(process_file) as in_file:
+        for line in in_file:
+            parsed_data = json.loads(line)
+            row_index = int(parsed_data['custom_id'].strip("row_"))
+            content = parsed_data['response']['body']['choices'][0]['message']['content']
+            responses[row_index] = content
+
+    return responses
+
+
+def get_all_responses(generated_data_dir):
+    """
+    :return: Sorted reposes based on custom id
+    """
+    # row_id -> index, content -> value
+    responses = {}
+    for filename in os.listdir(generated_data_dir):
+        if filename.endswith("_output.jsonl"):
+            process_filename = f"{generated_data_dir}/{filename}"
+            print(f"Processing {process_filename}")
+            responses.update(process_output(process_filename))
+
+    # Create new list by sorting with keys - rowid, needed to match input
+    responses_out = [responses[row_id] for row_id in responses.keys()]
+    return responses_out
+
+
+def get_args():
     argparse.ArgumentParser(description='Generate explanations for MD2D dataset')
     parser = argparse.ArgumentParser()
 
-    # Generate explanations for a batch of samples
-    parser.add_argument('--generate-batch',
-                        action='store_true', help='Generate explanations for a batch of samples')
-    parser.add_argument("--from-sample", type=int, default=0, help="Start index of the batch")
-    parser.add_argument("--to-sample", type=int, default=1, help="End index of the batch")
-    parser.add_argument("--generate-and-run", action='store_true',
-                        help="Generate batch and run OpenAI API")
+    parser.add_argument("--skip_generation", action='store_true',
+                        help="only processes each output file")
 
-    # Create batch job OpenAI API
-    parser.add_argument("--create-batch-job",
-                        action='store_true', help='Upload batch to OpenAI API')
-    parser.add_argument("--batch-filename", type=str,
-                        help="Path to the batch file")
+    parser.add_argument("--model_name",
+                        type=str, default="gpt-4o-2024-08-06",
+                        help="model to use for generation, also used to select folder to process")
+    parser.add_argument("--from_sample", type=int, default=0, help="Start index of the batch")
+    parser.add_argument("--to_sample", type=int, default=1, help="End index of the batch")
+    parser.add_argument("--batch_step", type=int, default=5,
+                        help="Batching steps: range(-from-sample, --to-sample, --batch-step)")
 
-    # Check batch status and get output
-    parser.add_argument("--get-batch-output",
-                        action='store_true', help='Check batch status and get output')
-    parser.add_argument("--batch-id", type=str, help="Batch ID")
+    parser.add_argument("--use_ollama", action="store_true",
+                        help="Instead of OpenAI api, local ollama will be used.")
 
-    # Process downloaded batch output
-    parser.add_argument("--process-output",
-                        action='store_true', help='Process output from OpenAI API')
-    parser.add_argument("--batch-out-filename", type=str,
-                        help="Path to the file with OpenAI API output")
+    return parser.parse_args()
 
-    # Process all outputs (similar as previous but for all)
-    parser.add_argument("--process-all",
-                        action='store_true', help='Process all outputs from OpenAI API')
 
-    args = parser.parse_args()
+def generate_all_batches(from_sample, to_sample, batch_step, generation_api, generated_data_dir):
+    input_data = read_input_data()
+    for loop_from in range(from_sample, to_sample, batch_step):
+        loop_to = loop_from + batch_step
+        print(f"Processing {loop_from} to {loop_to}")
 
-    if args.generate_batch:
-        create_batch_file(args.from_sample, args.to_sample)
-    elif args.create_batch_job:
-        create_batch_job(args.batch_filename)
-    elif args.get_batch_output:
-        get_output_batch(args.batch_id)
-    elif args.process_output:
-        process_output(args.batch_out_filename)
-    elif args.process_all:
-        base_dir = "openAI_batches"
-        for filename in os.listdir(base_dir):
-            if filename.endswith("_output.jsonl"):
-                out_filename = f"{base_dir}/{filename}"
-                print(f"Processing {out_filename}")
-                process_output(out_filename, refresh_metadata=False)
-        generate_metadata()
-    elif args.generate_and_run:
-        start_indexes = range(args.from_sample, args.to_sample, 5)
-        for loop_from in start_indexes:
-            print(f"Processing {loop_from} to {loop_from + 5}")
+        batch_filename = create_batch_file(loop_from,
+                                           input_data[loop_from:loop_to],
+                                           generation_api,
+                                           generated_data_dir
+                                           )
+        batch_id = create_batch_job(batch_filename)
+        download_output_batch(batch_id)
 
-            batch_filename = create_batch_file(loop_from, loop_from + 5)
-            batch_id = create_batch_job(batch_filename)
-            out_file = get_output_batch(batch_id)
-            process_output(out_file)
+        sleep_with_progress(60,
+                            description="Waiting before sending new batch file.")
 
-            sleep_with_progress(60)
 
-    else:
-        print("No action specified")
-        parser.print_help()
+def main():
+    args = get_args()
+
+    generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
+    generated_data_dir = os.path.join("openAI_batches", args.model_name)
+    os.makedirs(generated_data_dir, exist_ok=True)
+
+    if not args.skip_generation:
+        generate_all_batches(args.from_sample,
+                             args.to_sample,
+                             args.batch_step,
+                             generation_api,
+                             generated_data_dir
+                             )
+
+    # Remove file if exists
+    output_data_file = f"data/29_random_samples_{args.model_name}.jsonl"
+    silent_remove(output_data_file)
+
+    responses_out = get_all_responses(generated_data_dir)
+    with jsonlines.open(output_data_file, mode='w') as writer:
+        writer.write_all(responses_out)
+
+if __name__ == "__main__":
+    main()
