@@ -107,7 +107,14 @@ class ExplanationsDataset(Dataset):
         }
 
     def find_spans(self, text, selected_spans):
-        explanation = []
+        rationales = []
+
+        if len(selected_spans) == 0:
+            return rationales
+
+        if not isinstance(selected_spans, list):
+            print(selected_spans)
+            raise AssertionError("Selected spans must be list!")
 
         start_find = 0
         if isinstance(selected_spans[0], dict):
@@ -118,7 +125,7 @@ class ExplanationsDataset(Dataset):
                 continue
             span_length = len(span)
             # explanation[start_find + span_start:span_length] = 1
-            explanation.append(
+            rationales.append(
                 {
                     'start': start_find + span_start,
                     'length': span_length,
@@ -126,7 +133,7 @@ class ExplanationsDataset(Dataset):
                 }
             )
             start_find += span_start + span_length
-        return explanation
+        return rationales
 
     def encode_text(self, text):
         if text == " ":
@@ -172,8 +179,8 @@ if __name__ == "__main__":
     # Example usage
     # file_path = 'data/29_random_samples_explained.jsonl'
     # file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
-    # file_path = 'data/29_random_samples_gpt-4o-mini-2024-07-18.jsonl'
-    file_path = 'data/29_random_samples_gpt-4o-2024-08-06.jsonl'
+    file_path = 'data/29_random_samples_gpt-4o-mini-2024-07-18.jsonl'
+    # file_path = 'data/29_random_samples_gpt-4o-2024-08-06.jsonl'
 
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
     dataset = ExplanationsDataset(file_path, tokenizer, decode_positive_as_list=True)
