@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 
 from jsonlines import jsonlines
+from numpy.ma.core import fix_invalid
 from openai import OpenAI
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -109,21 +110,21 @@ def create_batch_name(id_from, id_to, generated_data_dir):
 
 def create_batch_fix_name(fix_id, generated_data_dir):
     time_str = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-    return f"{generated_data_dir}/{time_str}_fix_{fix_id}.jsonl"
+    return f"{generated_data_dir}/{time_str}_batch_{fix_id}.jsonl"
 
 
-def create_batch_file(data_chunk_ids, data_chunk, api, jsonl_filename):
+def create_batch_file(data_chunk, api, jsonl_filename):
     """
     Create batch file for a range of ids in a jsonl format, which is suitable for OpenAI API.
     https://platform.openai.com/docs/guides/batch/getting-started
     """
-    task_writer = jsonlines.Writer(open(jsonl_filename, "w"))
-    for row_id, d in zip(data_chunk_ids, data_chunk):
-        message = messages_for_passages(d["query"], d["positive"], api)
+    with jsonlines.open(jsonl_filename, "w") as task_writer:
+        for row_id, d in data_chunk.items():
+            message = messages_for_passages(d["query"], d["positive"], api)
 
-        # Create sub-batch
-        task = task_from_prompt(f"row_{row_id}", message)
-        task_writer.write(task)
+            # Create sub-batch
+            task = task_from_prompt(f"row_{row_id}", message)
+            task_writer.write(task)
 
     print(f"Batch file saved to {jsonl_filename}")
     return jsonl_filename
@@ -234,7 +235,7 @@ def process_output(process_file):
     return responses
 
 
-def get_all_responses(generated_data_dir):
+def get_all_responses(generated_data_dir, return_list=False):
     """
     :return: Sorted reposes based on custom id
     """
@@ -247,9 +248,8 @@ def get_all_responses(generated_data_dir):
             responses.update(process_output(process_filename))
 
     # Create new list by sorting with keys - rowid, needed to match input
-    responses_out = [responses[row_id] for row_id in responses.keys()]
-    responses_out = [json.loads(r) for r in responses_out]
-    return responses_out
+    responses_out = {k: json.loads(v) for k, v in responses.items()}
+    return [responses_out[row_id] for row_id in responses_out.keys()] if return_list else responses_out
 
 
 def get_args():
@@ -273,23 +273,33 @@ def get_args():
     return parser.parse_args()
 
 
-def generate_all_batches(data_chunks, batch_step, generation_api, generated_data_dir):
-    for chunk_id, data_chunk in enumerate(data_chunks):
-        loop_from = chunk_id * batch_step
-        loop_to = loop_from + batch_step
+def generate_one_batch(data_chunk, generation_api, jsonl_filename):
+    create_batch_file(data_chunk,
+                      generation_api,
+                      jsonl_filename
+                      )
+    batch_id = create_batch_job(jsonl_filename)
+    download_output_batch(batch_id)
+
+    sleep_with_progress(60,
+                        description="Waiting before sending new batch file.")
+
+
+def generate_all_batches(data_chunks, generation_api, generated_data_dir):
+    for data_chunk in data_chunks:
+        loop_from = data_chunk.keys()[0]
+        loop_to = data_chunk.keys()[-1]
         print(f"Processing {loop_from} to {loop_to}")
         jsonl_filename = create_batch_name(loop_from, loop_from + len(data_chunk), generated_data_dir)
-        data_chunk_ids = [i for i in range(loop_from, loop_to)]
-        batch_filename = create_batch_file(data_chunk_ids,
-                                           data_chunk,
-                                           generation_api,
-                                           jsonl_filename
-                                           )
-        batch_id = create_batch_job(batch_filename)
-        download_output_batch(batch_id)
 
-        sleep_with_progress(60,
-                            description="Waiting before sending new batch file.")
+        generate_one_batch(data_chunk, generation_api, jsonl_filename)
+
+
+def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir):
+    for fix_id, data_chunk in enumerate(data_chunks):
+        print(f"Creating {fix_id} fix batch file.")
+        jsonl_filename = create_batch_fix_name(fix_id, generated_data_dir)
+        generate_one_batch(data_chunk, generation_api, jsonl_filename)
 
 
 def write_output(responses_out, output_data_file):
@@ -302,6 +312,19 @@ def write_output(responses_out, output_data_file):
                     'selected_spans': out_selected['spans']
                 }
             )
+
+
+def update_output(responses_with_keys, output_data_file):
+    out_data = []
+    with jsonlines.open(output_data_file, mode='r') as reader:
+        for line in reader:
+            out_data.append(line)
+
+    for k, v in responses_with_keys.items():
+        out_data[k]['selected_spans'] = v
+
+    with jsonlines.open(output_data_file, mode='w') as writer:
+        writer.write_all(out_data)
 
 
 def find_invalid_samples(output_data_file):
@@ -327,15 +350,14 @@ def main():
     input_data = read_input_data()
 
     if not args.skip_generation:
-        data_chunks = [input_data[i:i + args.batch_step]
+        data_chunks = [{j: input_data[j] for j in range(i, i + args.batch_step)}
                        for i in range(args.from_sample, args.to_sample, args.batch_step)]
         generate_all_batches(data_chunks,
-                             args.batch_step,
                              generation_api,
                              generated_data_dir
                              )
 
-    responses_out = get_all_responses(generated_data_dir)
+    responses_out = get_all_responses(generated_data_dir, return_list=True)
 
     # Remove file if exists
     output_data_file = f"data/29_random_samples_{args.model_name}.jsonl"
@@ -343,29 +365,38 @@ def main():
     silent_remove(output_data_file)
     write_output(responses_out, output_data_file)
 
-    # for fix in fixes:
-    #    apply fix
+    last_fix = 0
+    # Find all fix directories in the target directory
+    for item in os.listdir(generated_data_dir):
+        full_path = os.path.join(generated_data_dir, item)
+
+        if os.path.isdir(full_path) and item.startswith('fix_'):
+            print(f"Directory found: {full_path}")
+            last_fix += 1
 
     while (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file))) > 0:
-        print(f"Current version has {invalid_len} samples. Trying to fix following indexes.")
+        print(f"Version after {last_fix} fixes has {invalid_len} invalid samples. "
+              f"Trying to fix following indexes.")
         print(invalid_samples)
 
+        fix_data_dir = os.path.join(generated_data_dir, f"fix_{last_fix}")
+        os.makedirs(fix_data_dir)
         # get chunks of data but only for invalid indexes
         invalid_data_chunks = [
-            [input_data[invalid_id] for invalid_id in invalid_samples[i:i + args.batch_step]]
+            {invalid_id: input_data[invalid_id] for invalid_id in invalid_samples[i:i + args.batch_step]}
             for i in range(0, len(invalid_samples), args.batch_step)
         ]
-        generate_all_batches(invalid_data_chunks,
-                             args.batch_step,
-                             generation_api,
-                             generated_data_dir
-                             )
+        generate_all_batches_fix(invalid_data_chunks,
+                                 generation_api,
+                                 fix_data_dir
+                                 )
 
-
-
-
-
+        responses_out = get_all_responses(generated_data_dir)
+        update_output(responses_out, output_data_file)
+        last_fix += 1
         break
+
+    print(f"{last_fix} fixes applied, 0 invalid samples ")
 
 
 if __name__ == "__main__":
