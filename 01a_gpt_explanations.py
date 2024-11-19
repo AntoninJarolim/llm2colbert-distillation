@@ -321,7 +321,7 @@ def update_output(responses_with_keys, output_data_file):
             out_data.append(line)
 
     for k, v in responses_with_keys.items():
-        out_data[k]['selected_spans'] = v
+        out_data[k]['selected_spans'] = v['spans']
 
     with jsonlines.open(output_data_file, mode='w') as writer:
         writer.write_all(out_data)
@@ -368,10 +368,11 @@ def main():
     last_fix = 0
     # Find all fix directories in the target directory
     for item in os.listdir(generated_data_dir):
-        full_path = os.path.join(generated_data_dir, item)
+        existing_fix_path = os.path.join(generated_data_dir, item)
 
-        if os.path.isdir(full_path) and item.startswith('fix_'):
-            print(f"Directory found: {full_path}")
+        if os.path.isdir(existing_fix_path) and item.startswith('fix_'):
+            responses_out = get_all_responses(existing_fix_path)
+            update_output(responses_out, output_data_file)
             last_fix += 1
 
     while (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file))) > 0:
