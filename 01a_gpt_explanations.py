@@ -3,15 +3,9 @@ import json
 import os
 import time
 from datetime import datetime
-from math import inf
-from os import write
 
-from PIL.PdfParser import encode_text
 from jsonlines import jsonlines
-from numpy.distutils.fcompiler import failed_fcompilers
 from openai import OpenAI
-from pydantic.v1.errors import IterableError
-from sympy.physics.units import action
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -30,7 +24,7 @@ class OpenAIGenerator:
             self.model = 'ollama'
         else:
             self.client = OpenAI()
-            self.model = model_name # self.model = "gpt-4o-2024-08-06" "gpt-4o-mini"
+            self.model = model_name  # self.model = "gpt-4o-2024-08-06" "gpt-4o-mini"
 
         self.temperature = 0.2
         self.max_tokens = 1024
@@ -108,30 +102,28 @@ def messages_for_passages(query, passage, openai_api):
     return api_message
 
 
-def init_writer(id_from, id_to, generated_data_dir):
+def create_batch_name(id_from, id_to, generated_data_dir):
     time_str = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-    jsonl_filename = f"{generated_data_dir}/{time_str}_batch-{id_from}-{id_to}.jsonl"
-    return jsonl_filename, jsonlines.Writer(open(jsonl_filename, "w"))
+    return f"{generated_data_dir}/{time_str}_batch-{id_from}-{id_to}.jsonl"
 
 
-def create_batch_file(starting_id, data_chunk, api, generated_data_dir):
+def create_batch_fix_name(fix_id, generated_data_dir):
+    time_str = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    return f"{generated_data_dir}/{time_str}_fix_{fix_id}.jsonl"
+
+
+def create_batch_file(data_chunk_ids, data_chunk, api, jsonl_filename):
     """
     Create batch file for a range of ids in a jsonl format, which is suitable for OpenAI API.
     https://platform.openai.com/docs/guides/batch/getting-started
     """
-
-    jsonl_filename, task_writer = init_writer(starting_id, starting_id + len(data_chunk), generated_data_dir)
-
-    for i, d in tqdm(enumerate(data_chunk), desc="Dialogs"):
+    task_writer = jsonlines.Writer(open(jsonl_filename, "w"))
+    for row_id, d in zip(data_chunk_ids, data_chunk):
         message = messages_for_passages(d["query"], d["positive"], api)
 
         # Create sub-batch
-        tasks = []
-        task = task_from_prompt(f"row_{starting_id + i}", message)
-        tasks.append(task)
-
-        # Append tasks to the file
-        task_writer.write_all(tasks)
+        task = task_from_prompt(f"row_{row_id}", message)
+        task_writer.write(task)
 
     print(f"Batch file saved to {jsonl_filename}")
     return jsonl_filename
@@ -271,8 +263,8 @@ def get_args():
                         type=str, default="gpt-4o-2024-08-06",
                         help="model to use for generation, also used to select folder to process")
     parser.add_argument("--from_sample", type=int, default=0, help="Start index of the batch")
-    parser.add_argument("--to_sample", type=int, default=1, help="End index of the batch")
-    parser.add_argument("--batch_step", type=int, default=5,
+    parser.add_argument("--to_sample", type=int, default=30, help="End index of the batch")
+    parser.add_argument("--batch_step", type=int, default=15,
                         help="Batching steps: range(-from-sample, --to-sample, --batch-step)")
 
     parser.add_argument("--use_ollama", action="store_true",
@@ -281,16 +273,17 @@ def get_args():
     return parser.parse_args()
 
 
-def generate_all_batches(from_sample, to_sample, batch_step, generation_api, generated_data_dir):
-    input_data = read_input_data()
-    for loop_from in range(from_sample, to_sample, batch_step):
+def generate_all_batches(data_chunks, batch_step, generation_api, generated_data_dir):
+    for chunk_id, data_chunk in enumerate(data_chunks):
+        loop_from = chunk_id * batch_step
         loop_to = loop_from + batch_step
         print(f"Processing {loop_from} to {loop_to}")
-
-        batch_filename = create_batch_file(loop_from,
-                                           input_data[loop_from:loop_to],
+        jsonl_filename = create_batch_name(loop_from, loop_from + len(data_chunk), generated_data_dir)
+        data_chunk_ids = [i for i in range(loop_from, loop_to)]
+        batch_filename = create_batch_file(data_chunk_ids,
+                                           data_chunk,
                                            generation_api,
-                                           generated_data_dir
+                                           jsonl_filename
                                            )
         batch_id = create_batch_job(batch_filename)
         download_output_batch(batch_id)
@@ -312,7 +305,6 @@ def write_output(responses_out, output_data_file):
 
 
 def find_invalid_samples(output_data_file):
-
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
     dataset = ExplanationsDataset(output_data_file, tokenizer, decode_positive_as_list=True)
     index = 0
@@ -326,17 +318,18 @@ def find_invalid_samples(output_data_file):
     return failed_indexes
 
 
-
 def main():
     args = get_args()
 
     generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
     generated_data_dir = os.path.join("openAI_batches", args.model_name)
     os.makedirs(generated_data_dir, exist_ok=True)
+    input_data = read_input_data()
 
     if not args.skip_generation:
-        generate_all_batches(args.from_sample,
-                             args.to_sample,
+        data_chunks = [input_data[i:i + args.batch_step]
+                       for i in range(args.from_sample, args.to_sample, args.batch_step)]
+        generate_all_batches(data_chunks,
                              args.batch_step,
                              generation_api,
                              generated_data_dir
@@ -350,10 +343,30 @@ def main():
     silent_remove(output_data_file)
     write_output(responses_out, output_data_file)
 
+    # for fix in fixes:
+    #    apply fix
+
     while (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file))) > 0:
         print(f"Current version has {invalid_len} samples. Trying to fix following indexes.")
         print(invalid_samples)
+
+        # get chunks of data but only for invalid indexes
+        invalid_data_chunks = [
+            [input_data[invalid_id] for invalid_id in invalid_samples[i:i + args.batch_step]]
+            for i in range(0, len(invalid_samples), args.batch_step)
+        ]
+        generate_all_batches(invalid_data_chunks,
+                             args.batch_step,
+                             generation_api,
+                             generated_data_dir
+                             )
+
+
+
+
+
         break
+
 
 if __name__ == "__main__":
     main()
