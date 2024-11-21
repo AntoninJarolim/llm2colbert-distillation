@@ -13,45 +13,7 @@ def tokenize_list(tokens, tokenizer):
     return token_list
 
 
-def split_by_spans(text, spans):
-    spans = sorted(spans, key=lambda x: x['start'])
-
-    result = []
-    current_pos = 0
-
-    for span in spans:
-        start = span['start']
-        end = span['end']
-
-        # Add any text before the current span
-        if current_pos < start:
-            result.append({
-                'span': text[current_pos:start],
-                'label': 0
-            })
-
-        # Add the specified span
-        result.append(
-            {
-                'span': text[start:end],
-                'label': 1
-            }
-        )
-
-        # Update current position
-        current_pos = end
-
-    # Add any remaining text after the last span
-    if current_pos < len(text):
-        result.append({
-            'span': text[current_pos:],
-            'label': 0
-        })
-
-    return result
-
-
-def find_span_start_index(self, text, span: str):
+def find_span_start_index(text, span: str):
     """
     Find span sub-sequence in text and return text-wise indexes
     """
@@ -68,6 +30,36 @@ def find_span_start_index(self, text, span: str):
             return i  # Return the start index if a match is found
 
     return -1  # Return -1 if the span is not found in text
+
+
+def find_spans(text, selected_spans):
+    rationales = []
+
+    if len(selected_spans) == 0:
+        return rationales
+
+    if not isinstance(selected_spans, list):
+        print(selected_spans)
+        raise AssertionError("Selected spans must be list!")
+
+    start_find = 0
+    if isinstance(selected_spans[0], dict):
+        selected_spans = [span['text'] for span in selected_spans]
+    for span in selected_spans:
+        find_in_text = text[start_find:]
+        span_start = find_span_start_index(find_in_text, span)
+        if span_start == -1:
+            raise AssertionError(f"Selected span '{span}' was not found in the text: {find_in_text}")
+        span_length = len(span)
+        rationales.append(
+            {
+                'start': start_find + span_start,
+                'length': span_length,
+                'end': start_find + span_start + span_length,
+            }
+        )
+        start_find += span_start + span_length
+    return rationales
 
 
 class ExplanationsDataset(Dataset):
@@ -91,9 +83,8 @@ class ExplanationsDataset(Dataset):
         :param idx:
         :return:
         """
-        sample = self.data[idx]
-        selected_spans = sample['selected_spans']
-        tokenized_positive, rationales = self.tokenize_with_spans(sample['positive'], selected_spans)
+        sample: dict = self.data[idx]
+        tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['positive'], sample['selected_spans'])
 
         return {
             'query': sample['query'],
@@ -102,70 +93,43 @@ class ExplanationsDataset(Dataset):
             'tokenized_negative': self.encode_text(sample['negative']),
             'tokenized_positive': tokenized_positive,
             'tokenized_positive_decoded': self.decode_list(tokenized_positive),
-            'rationales': rationales,
+            'rationales': binary_rationales,
             'selected_spans': sample['selected_spans']
         }
 
-    def find_spans(self, text, selected_spans):
-        rationales = []
-
-        if len(selected_spans) == 0:
-            return rationales
-
-        if not isinstance(selected_spans, list):
-            print(selected_spans)
-            raise AssertionError("Selected spans must be list!")
-
-        start_find = 0
-        if isinstance(selected_spans[0], dict):
-            selected_spans = [span['text'] for span in selected_spans]
-        for span in selected_spans:
-            span_start = find_span_start_index(self, text[start_find:], span)
-            if span_start == -1:
-                continue
-            span_length = len(span)
-            # explanation[start_find + span_start:span_length] = 1
-            rationales.append(
-                {
-                    'start': start_find + span_start,
-                    'length': span_length,
-                    'end': start_find + span_start + span_length,
-                }
-            )
-            start_find += span_start + span_length
-        return rationales
-
     def encode_text(self, text):
-        if text == " ":
-            # tokenizer discards just space
-            if self.tokenizer.decode(self.tokenizer.encode(" ", add_special_tokens=False,)) == "":
-                return torch.tensor([6])
-
-        return self.tokenizer.encode(
+        outputs = self.tokenizer(
             text,
             return_tensors="pt",
             add_special_tokens=False,
-        ).flatten()
+            return_offsets_mapping=True
+        )
+        outputs.update({
+            "offset_mapping": outputs["offset_mapping"].squeeze(0),
+            "input_ids": outputs["input_ids"].squeeze(0),
+        })
+        return outputs
 
-    def tokenize_with_spans(self, text, span_strings):
-        found_spans = self.find_spans(text, span_strings)
-        splits = split_by_spans(text, found_spans)
+    def tokenize_with_spans(self, positive_text, selected_spans):
+        # Find spans and extract starts and ends
+        found_spans = find_spans(positive_text, selected_spans)
+        spand_starts = torch.tensor([s['start'] for s in found_spans])
+        spand_ends = torch.tensor([s['end'] for s in found_spans])
 
-        # Todo: probably better approach is to tokenize list as batch, and use lengths to create label tensors
-        label_tensors = []
-        encoded_spans = []
-        for split in splits:
-            encoded_span = self.encode_text(split['span'])
-            label_tensor = torch.full(encoded_span.size(), split['label'])
+        # Encode and split offsets to starts and ends
+        encoded = self.encode_text(positive_text)
+        encoded_text = encoded["input_ids"]
+        offset_mapping_starts = encoded["offset_mapping"][:, 0] # 0th dim are starts
+        offset_mapping_ends = encoded["offset_mapping"][:, 1] # 1st dim are ends
 
-            encoded_spans.append(encoded_span)
-            label_tensors.append(label_tensor)
+        # Reshape for broadcasting each-to-each
+        start_overlap = offset_mapping_starts[:, None] < spand_ends
+        end_overlap = offset_mapping_ends[:, None] > spand_starts
+        label_tensors = torch.any(start_overlap & end_overlap, dim=1)
 
-        encoded_spans = torch.cat(encoded_spans)
-        label_tensors = torch.cat(label_tensors)
-
-        assert len(encoded_spans) == len(label_tensors)
-        return encoded_spans, label_tensors
+        # Binary labels must match encoded text length in number of tokens
+        assert len(encoded_text) == len(label_tensors)
+        return encoded_text, label_tensors
 
     def decode_list(self, tokens):
         return (
@@ -178,8 +142,8 @@ class ExplanationsDataset(Dataset):
 if __name__ == "__main__":
     # Example usage
     # file_path = 'data/29_random_samples_explained.jsonl'
-    # file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
-    file_path = 'data/29_random_samples_gpt-4o-mini-2024-07-18.jsonl'
+    file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
+    # file_path = 'data/29_random_samples_gpt-4o-mini-2024-07-18.jsonl'
     # file_path = 'data/29_random_samples_gpt-4o-2024-08-06.jsonl'
 
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
