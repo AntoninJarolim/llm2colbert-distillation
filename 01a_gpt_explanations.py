@@ -75,18 +75,6 @@ class OpenAIGenerator:
         return generated_answer
 
 
-def turns_for_gpt(turns):
-    gpt_diag_turns = []
-    # remove last turn as it is the one generated from the agent
-    for turn in turns[:-1]:
-        gpt_diag_turns.append({
-            "role": turn["role"],
-            "turn_id": turn["turn_id"],
-            "utterance": turn["utterance"]
-        })
-    return gpt_diag_turns
-
-
 def task_from_prompt(custom_id, prompt):
     return {
         "custom_id": custom_id,
@@ -188,17 +176,6 @@ def message_from_output(res):
         message = json.loads(message)
     return message
 
-
-def messages_from_file(batch_filename):
-    messages = []
-    with jsonlines.open(batch_filename) as reader:
-        for res in reader:
-            message = message_from_output(res)
-            messages.append({
-                "spans": message["spans"],
-                "id": res["custom_id"]
-            })
-    return messages
 
 
 def sleep_with_progress(seconds, description=None):
