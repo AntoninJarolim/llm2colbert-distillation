@@ -17,15 +17,14 @@ from llama_explanations import create_message
 class OpenAIGenerator:
     def __init__(self, model_name, use_ollama=False):
         if use_ollama:
-            print("Using ollama instead of openAI api")
+            print("Using ollama instead of openAI api!")
             self.client = OpenAI(
                 base_url='http://athena20.fit.vutbr.cz:11434/v1',
                 api_key='ollama',
             )
-            self.model = 'ollama'
         else:
             self.client = OpenAI()
-            self.model = model_name  # self.model = "gpt-4o-2024-08-06" "gpt-4o-mini"
+        self.model = model_name  # self.model = "gpt-4o-2024-08-06" "gpt-4o-mini"
 
         self.temperature = 0.2
         self.max_tokens = 1024
@@ -159,7 +158,7 @@ def download_output_batch(batch_id):
     batch = client.batches.retrieve(batch_id)
 
     while batch.status != "completed":
-        print(batch)
+        # print(batch)
         print(f"Batch is not completed yet - status is {batch.status}")
         if batch.status == "failed":
             raise Exception(f"Batch failed: {batch}")
@@ -287,8 +286,8 @@ def generate_one_batch(data_chunk, generation_api, jsonl_filename):
 
 def generate_all_batches(data_chunks, generation_api, generated_data_dir):
     for data_chunk in data_chunks:
-        loop_from = data_chunk.keys()[0]
-        loop_to = data_chunk.keys()[-1]
+        loop_from = list(data_chunk.keys())[0]
+        loop_to = list(data_chunk.keys())[-1]
         print(f"Processing {loop_from} to {loop_to}")
         jsonl_filename = create_batch_name(loop_from, loop_from + len(data_chunk), generated_data_dir)
 
@@ -350,7 +349,7 @@ def main():
     input_data = read_input_data()
 
     if not args.skip_generation:
-        data_chunks = [{j: input_data[j] for j in range(i, i + args.batch_step)}
+        data_chunks = [{j: input_data[j] for j in range(i, min(i + args.batch_step, len(input_data)))}
                        for i in range(args.from_sample, args.to_sample, args.batch_step)]
         generate_all_batches(data_chunks,
                              generation_api,
@@ -369,7 +368,6 @@ def main():
     # Find all fix directories in the target directory
     for item in os.listdir(generated_data_dir):
         existing_fix_path = os.path.join(generated_data_dir, item)
-
         if os.path.isdir(existing_fix_path) and item.startswith('fix_'):
             responses_out = get_all_responses(existing_fix_path)
             update_output(responses_out, output_data_file)
@@ -392,10 +390,9 @@ def main():
                                  fix_data_dir
                                  )
 
-        responses_out = get_all_responses(generated_data_dir)
+        responses_out = get_all_responses(fix_data_dir)
         update_output(responses_out, output_data_file)
         last_fix += 1
-        break
 
     print(f"{last_fix} fixes applied, 0 invalid samples ")
 
