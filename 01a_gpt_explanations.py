@@ -5,7 +5,6 @@ import time
 from datetime import datetime
 
 from jsonlines import jsonlines
-from numpy.ma.core import fix_invalid
 from openai import OpenAI
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -71,8 +70,7 @@ class OpenAIGenerator:
     def __call__(self, message):
         api_dict = self.create_api_call_dict(message)
         generation_result = self.client.chat.completions.create(**api_dict)
-        generated_answer = generation_result.choices[0].message.content
-        return generated_answer
+        return generation_result
 
 
 def task_from_prompt(custom_id, prompt):
@@ -177,7 +175,6 @@ def message_from_output(res):
     return message
 
 
-
 def sleep_with_progress(seconds, description=None):
     if description is None:
         description = "Waiting"
@@ -240,7 +237,7 @@ def get_args():
                         help="model to use for generation, also used to select folder to process")
     parser.add_argument("--from_sample", type=int, default=0, help="Start index of the batch")
     parser.add_argument("--to_sample", type=int, default=30, help="End index of the batch")
-    parser.add_argument("--batch_step", type=int, default=15,
+    parser.add_argument("--batch_size", type=int, default=15,
                         help="Batching steps: range(-from-sample, --to-sample, --batch-step)")
 
     parser.add_argument("--use_ollama", action="store_true",
@@ -249,7 +246,14 @@ def get_args():
     return parser.parse_args()
 
 
-def generate_one_batch(data_chunk, generation_api, jsonl_filename):
+def generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama):
+    if use_ollama:
+        generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename)
+    else:
+        generate_one_batch_openai(data_chunk, generation_api, jsonl_filename)
+
+
+def generate_one_batch_openai(data_chunk, generation_api, jsonl_filename):
     create_batch_file(data_chunk,
                       generation_api,
                       jsonl_filename
@@ -261,21 +265,42 @@ def generate_one_batch(data_chunk, generation_api, jsonl_filename):
                         description="Waiting before sending new batch file.")
 
 
-def generate_all_batches(data_chunks, generation_api, generated_data_dir):
+def generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename):
+    responses = []
+    for row_id, d in tqdm(data_chunk.items(), desc="Generating batch"):
+        response = generation_api(create_message(d["query"], d["positive"]))
+        choice = dict(response.choices[0])
+        choice['message'] = dict(choice['message'])
+        responses.append(
+            {
+                'custom_id': f"row_{row_id}",
+                'response': {
+                    'body': {
+                        'choices': [choice]
+                    }
+                }
+            }
+        )
+    out_filename = jsonl_filename.replace('.jsonl', '_output.jsonl')
+    with jsonlines.open(out_filename, mode='w') as writer:
+        writer.write_all(responses)
+
+
+def generate_all_batches(data_chunks, generation_api, generated_data_dir, use_ollama):
     for data_chunk in data_chunks:
         loop_from = list(data_chunk.keys())[0]
         loop_to = list(data_chunk.keys())[-1]
         print(f"Processing {loop_from} to {loop_to}")
         jsonl_filename = create_batch_name(loop_from, loop_from + len(data_chunk), generated_data_dir)
 
-        generate_one_batch(data_chunk, generation_api, jsonl_filename)
+        generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama)
 
 
-def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir):
+def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir, use_ollama):
     for fix_id, data_chunk in enumerate(data_chunks):
         print(f"Creating {fix_id} fix batch file.")
         jsonl_filename = create_batch_fix_name(fix_id, generated_data_dir)
-        generate_one_batch(data_chunk, generation_api, jsonl_filename)
+        generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama)
 
 
 def write_output(responses_out, output_data_file):
@@ -290,17 +315,33 @@ def write_output(responses_out, output_data_file):
             )
 
 
-def update_output(responses_with_keys, output_data_file):
+def read_out_data(output_data_file) -> list[dict]:
     out_data = []
     with jsonlines.open(output_data_file, mode='r') as reader:
         for line in reader:
             out_data.append(line)
+    return out_data
+
+def write_out_data(output_data_file, out_data):
+    with jsonlines.open(output_data_file, mode='w') as writer:
+        writer.write_all(out_data)
+
+
+def update_output(responses_with_keys, output_data_file):
+    out_data = read_out_data(output_data_file)
 
     for k, v in responses_with_keys.items():
         out_data[k]['selected_spans'] = v['spans']
 
-    with jsonlines.open(output_data_file, mode='w') as writer:
-        writer.write_all(out_data)
+    write_out_data(output_data_file, out_data)
+
+def remove_rows_output(output_data_file, indexes_to_remove):
+    out_data = read_out_data(output_data_file)
+
+    for remove_idx in indexes_to_remove:
+        out_data[remove_idx]['selected_spans'] = None
+
+    write_out_data(output_data_file, out_data)
 
 
 def find_invalid_samples(output_data_file):
@@ -317,20 +358,33 @@ def find_invalid_samples(output_data_file):
     return failed_indexes
 
 
+def prepare_out_dir(generated_data_dir):
+    try:
+        os.makedirs(generated_data_dir)
+    except FileExistsError:
+        raise AssertionError(f"Refused to generate data into existing directory: '{generated_data_dir}'.")
+
+
+def dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len):
+    return (len(invalid_samples_history) < max_regenerate_count
+            or not sum(invalid_samples_history[-max_regenerate_count:]) == max_regenerate_count * invalid_len)
+
+
 def main():
     args = get_args()
 
     generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
     generated_data_dir = os.path.join("openAI_batches", args.model_name)
-    os.makedirs(generated_data_dir, exist_ok=True)
     input_data = read_input_data()
 
     if not args.skip_generation:
-        data_chunks = [{j: input_data[j] for j in range(i, min(i + args.batch_step, len(input_data)))}
-                       for i in range(args.from_sample, args.to_sample, args.batch_step)]
+        prepare_out_dir(generated_data_dir)
+        data_chunks = [{j: input_data[j] for j in range(i, min(i + args.batch_size, len(input_data)))}
+                       for i in range(args.from_sample, args.to_sample, args.batch_size)]
         generate_all_batches(data_chunks,
                              generation_api,
-                             generated_data_dir
+                             generated_data_dir,
+                             args.use_ollama
                              )
 
     responses_out = get_all_responses(generated_data_dir, return_list=True)
@@ -350,6 +404,8 @@ def main():
             update_output(responses_out, output_data_file)
             last_fix += 1
 
+    invalid_samples_history = []
+    max_regenerate_count = 5
     while (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file))) > 0:
         print(f"Version after {last_fix} fixes has {invalid_len} invalid samples. "
               f"Trying to fix following indexes.")
@@ -359,17 +415,27 @@ def main():
         os.makedirs(fix_data_dir)
         # get chunks of data but only for invalid indexes
         invalid_data_chunks = [
-            {invalid_id: input_data[invalid_id] for invalid_id in invalid_samples[i:i + args.batch_step]}
-            for i in range(0, len(invalid_samples), args.batch_step)
+            {invalid_id: input_data[invalid_id] for invalid_id in invalid_samples[i:i + args.batch_size]}
+            for i in range(0, len(invalid_samples), args.batch_size)
         ]
         generate_all_batches_fix(invalid_data_chunks,
                                  generation_api,
-                                 fix_data_dir
+                                 fix_data_dir,
+                                 args.use_ollama
                                  )
 
+        # Update final output file with generated fixes
         responses_out = get_all_responses(fix_data_dir)
         update_output(responses_out, output_data_file)
         last_fix += 1
+
+        # Exit loop if N numbers of tries did not improve dataset
+        invalid_samples_history.append(invalid_len)
+        if not dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len):
+            print(f"Exiting because the count of invalid samples "
+                  f"was not changed in last {max_regenerate_count} iterations.")
+            remove_rows_output(output_data_file, invalid_samples)
+            break
 
     print(f"{last_fix} fixes applied, 0 invalid samples ")
 
