@@ -42,23 +42,20 @@ def find_spans(text, selected_spans):
         print(selected_spans)
         raise AssertionError("Selected spans must be list!")
 
-    start_find = 0
     if isinstance(selected_spans[0], dict):
         selected_spans = [span['text'] for span in selected_spans]
     for span in selected_spans:
-        find_in_text = text[start_find:]
-        span_start = find_span_start_index(find_in_text, span)
+        span_start = find_span_start_index(text, span)
         if span_start == -1:
-            raise AssertionError(f"Selected span '{span}' was not found in the text: {find_in_text}")
+            raise AssertionError(f"Selected span '{span}' was not found in the text: {text}")
         span_length = len(span)
         rationales.append(
             {
-                'start': start_find + span_start,
+                'start': span_start,
                 'length': span_length,
-                'end': start_find + span_start + span_length,
+                'end': span_start + span_length,
             }
         )
-        start_find += span_start + span_length
     return rationales
 
 
