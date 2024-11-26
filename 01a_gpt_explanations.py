@@ -10,7 +10,6 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from explainable_dataset import ExplanationsDataset
-from llama_explanations import create_message
 
 
 class OpenAIGenerator:
@@ -72,6 +71,30 @@ class OpenAIGenerator:
         generation_result = self.client.chat.completions.create(**api_dict)
         return generation_result
 
+
+def create_message(query, passage):
+    return f""""
+    You will be presented with a query and passage, please 
+    extract passage spans which are most relevant to the query.
+
+    Span must be comprehensive: removing the span from the text should make it irrelevant 
+    to the query.
+    Span must be plausible: human reading only this span should be convinced that text is relevant.   
+    Let's read both passage and query, and then carefully consider
+    relevance of each passage part to the query. 
+
+    You may select multiple spans if needed, but ensure that the selected sections do not overlap. 
+    Try not to select entire sentences, but only fine-grained spans.
+    Do not correct or modify the text!
+    Include all grammatical and syntactic errors from the original text, 
+    do not remove senseless spaces or punctuation.
+
+    Return only json_object with key 'spans' and list of selected spans 
+    (text, start, end) as value. 
+    \n
+    Query: {query}
+    Passage: {passage}
+    """
 
 def task_from_prompt(custom_id, prompt):
     return {
@@ -183,7 +206,7 @@ def sleep_with_progress(seconds, description=None):
         time.sleep(1)
 
 
-def read_input_data(file_path='data/29_random_samples.jsonl'):
+def read_input_data(file_path='data/35_random_samples.jsonl'):
     with open(file_path, 'r') as f:
         data = [json.loads(line) for line in f]
     return data
@@ -242,6 +265,8 @@ def get_args():
 
     parser.add_argument("--use_ollama", action="store_true",
                         help="Instead of OpenAI api, local ollama will be used.")
+    parser.add_argument("--force_rewrite", action="store_true",
+                        help="Disables the check for generating into existing directory.")
 
     return parser.parse_args()
 
@@ -358,11 +383,12 @@ def find_invalid_samples(output_data_file):
     return failed_indexes
 
 
-def prepare_out_dir(generated_data_dir):
+def prepare_out_dir(generated_data_dir, force_rewrite):
     try:
         os.makedirs(generated_data_dir)
     except FileExistsError:
-        raise AssertionError(f"Refused to generate data into existing directory: '{generated_data_dir}'.")
+        if not force_rewrite:
+            raise AssertionError(f"Refused to generate data into existing directory: '{generated_data_dir}'.")
 
 
 def dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len):
@@ -378,7 +404,7 @@ def main():
     input_data = read_input_data()
 
     if not args.skip_generation:
-        prepare_out_dir(generated_data_dir)
+        prepare_out_dir(generated_data_dir, args.force_rewrite)
         data_chunks = [{j: input_data[j] for j in range(i, min(i + args.batch_size, len(input_data)))}
                        for i in range(args.from_sample, args.to_sample, args.batch_size)]
         generate_all_batches(data_chunks,
@@ -390,7 +416,7 @@ def main():
     responses_out = get_all_responses(generated_data_dir, return_list=True)
 
     # Remove file if exists
-    output_data_file = f"data/29_random_samples_{args.model_name}.jsonl"
+    output_data_file = f"data/35_random_samples_{args.model_name}.jsonl"
     print(f"Saving output data to {output_data_file}")
     silent_remove(output_data_file)
     write_output(responses_out, output_data_file)
