@@ -1,9 +1,6 @@
 import json
-from cProfile import label
-from tokenize import tokenize
-
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
 def tokenize_list(tokens, tokenizer):
@@ -35,7 +32,7 @@ def find_span_start_index(text, span: str):
 def find_spans(text, selected_spans):
     rationales = []
 
-    if len(selected_spans) == 0:
+    if selected_spans is None or len(selected_spans) == 0:
         return rationales
 
     if not isinstance(selected_spans, list):
