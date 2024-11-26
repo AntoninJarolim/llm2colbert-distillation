@@ -12,12 +12,13 @@ def print_30_random():
 
     # Randomly select 1000 rows
     select_n = 1000
-    random.seed(42)  # For reproducibility
+    random.seed(42)  # For reproducibility 29 samples
+    random.seed(56415)  # For reproducibility 6 additional samples
     sample_indices = random.sample(range(len(subset)), select_n)
     sampled_data = subset.select(sample_indices)
 
     # To view the sampled data
-    nr_to_save = 30
+    nr_to_save = 6
     for i in range(select_n):
         if sampled_data[i]["positive"].isascii():
             print(json.dumps(sampled_data[i], ensure_ascii=False))
@@ -30,8 +31,8 @@ def print_30_random():
 
 def annotate_data():
     # Path to your JSON file
-    input_file = "data/30_random_samples.jsonl"
-    output_file = "data/30_random_samples_explained.jsonl"
+    input_file = "data/6_random_samples.jsonl"
+    output_file = "data/6_random_samples_explained.jsonl"
 
     # Open the output file for writing
     with open(output_file, "w") as outfile:
