@@ -271,7 +271,7 @@ def create_highlighted_word(word, bg_color, fg_color):
 def create_highlighted_passage(passage_tokens, gt_label_list, annotation_scores,
                                base_colour, colour_type, gt_label_colour=None):
     highlighted_passage = []
-    gt_label_colour = gt_label_colour if gt_label_colour is not None else "#44FF55"
+    gt_label_colour = gt_label_colour if gt_label_colour is not None else "#00A50F"
 
     # Create default list of colours for each token
     colours_annotation_list = ["#00000000"] * len(passage_tokens)
