@@ -206,7 +206,7 @@ def sleep_with_progress(seconds, description=None):
         time.sleep(1)
 
 
-def read_input_data(file_path='data/35_random_samples.jsonl'):
+def read_input_data(file_path):
     with open(file_path, 'r') as f:
         data = [json.loads(line) for line in f]
     return data
@@ -255,7 +255,9 @@ def get_args():
     parser.add_argument("--skip_generation", action='store_true',
                         help="only processes each output file")
 
-    parser.add_argument('--output_data_name', type='str', default='out_data.json',
+    parser.add_argument('--output_data_name', type=str, required=True,
+                        help="Name of final output file.")
+    parser.add_argument('--input_data_name', type=str, required=True,
                         help="Name of final output file.")
 
     parser.add_argument("--model_name",
@@ -331,8 +333,7 @@ def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir, us
         generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama)
 
 
-def write_output(responses_out, output_data_file):
-    input_data = read_input_data()
+def write_output(responses_out, output_data_file, input_data):
     with jsonlines.open(output_data_file, mode='w') as writer:
         for input_data, out_selected in zip(input_data, responses_out):
             writer.write(
@@ -404,7 +405,7 @@ def main():
 
     generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
     generated_data_dir = os.path.join("data/generated_batches", args.model_name)
-    input_data = read_input_data()
+    input_data = read_input_data(args.input_data_name)
 
     if not args.skip_generation:
         prepare_out_dir(generated_data_dir, args.force_rewrite)
@@ -422,7 +423,7 @@ def main():
     output_data_file = f"data/{args.output_data_name}"
     print(f"Saving output data to {output_data_file}")
     silent_remove(output_data_file)
-    write_output(responses_out, output_data_file)
+    write_output(responses_out, output_data_file, input_data)
 
     last_fix = 0
     # Find all fix directories in the target directory
