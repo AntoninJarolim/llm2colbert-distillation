@@ -255,6 +255,9 @@ def get_args():
     parser.add_argument("--skip_generation", action='store_true',
                         help="only processes each output file")
 
+    parser.add_argument('--output_data_name', type='str', default='out_data.json',
+                        help="Name of final output file.")
+
     parser.add_argument("--model_name",
                         type=str, default="gpt-4o-2024-08-06",
                         help="model to use for generation, also used to select folder to process")
@@ -400,7 +403,7 @@ def main():
     args = get_args()
 
     generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
-    generated_data_dir = os.path.join("openAI_batches", args.model_name)
+    generated_data_dir = os.path.join("data/generated_batches", args.model_name)
     input_data = read_input_data()
 
     if not args.skip_generation:
@@ -416,7 +419,7 @@ def main():
     responses_out = get_all_responses(generated_data_dir, return_list=True)
 
     # Remove file if exists
-    output_data_file = f"data/35_random_samples_{args.model_name}.jsonl"
+    output_data_file = f"data/{args.output_data_name}"
     print(f"Saving output data to {output_data_file}")
     silent_remove(output_data_file)
     write_output(responses_out, output_data_file)

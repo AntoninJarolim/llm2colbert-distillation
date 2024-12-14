@@ -1,5 +1,4 @@
 data/
-openAI_batches/
 .idea/
 .env
 notebooks/.ipynb_checkpoints
