@@ -27,7 +27,6 @@ queries_path = "colbert_data/collection.tsv"
 collection = defaultdict(str)
 with open(queries_path, "r") as coll_file:
     for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
-        break
         p_id, d = line.strip().split("\t")
         collection[int(p_id)] = d
 
@@ -141,14 +140,3 @@ def debug_print(batch_psgs, psg_id, q_id):
 
 extract_ids_to_extract_relevancy_for()
 
-
-# def count_first_place_annotated():
-#     first_annotated = 0
-#     for reranked_passages in reranked_scores:
-#         q_id = reranked_passages[0]
-#         most_relevant_passage_id = reranked_passages[1][0]
-#
-#         if most_relevant_passage_id in qrels[q_id]:
-#             first_annotated += 1
-#
-#     print(f"{first_annotated}/{len(reranked_scores)}")
