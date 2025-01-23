@@ -51,37 +51,15 @@ def count_query_observations():
     return q_counts
 
 
-def create_unique_scores_dataset(out_file="colbert_data/examples_800k_unique.jsonl"):
-    seen_ids = set()
-
-    with open(out_file, "w") as writer:
-        with open(file_path, "r") as file:
-            for line_id, line in tqdm(enumerate(file), desc="Processing lines", unit="lines",
-                                      total=nr_reranked_examples):
-                q_id = json.loads(line)[0]
-
-                if q_id not in seen_ids:
-                    writer.write(line)
-                    seen_ids.add(q_id)
-
-                    if nr_seen_ids % 10_000 == 0:
-                        print(f"Seen {nr_seen_ids} unique queries")
-
-                if (nr_seen_ids := len(seen_ids)) == nr_in_one_experiment:
-                    print(f"Last missing query id found at line '{line_id}'")
-                    break
-
-
-create_unique_scores_dataset()
 
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
-                                         out_file="colbert_data/ids_to_extract_relevancy_for.json"):
-    out_generate = []
+                                         out_file="colbert_data/examples_800k_unique.jsonl"):
+    out_generate = {}
     ranks = defaultdict(int)
     nr_debug_prints = 1
     nr_have_relevant_not_in_batch = 0
     with jsonlines.open(input_file) as reader:
-        for reranked_passages in tqdm(reader, desc="Processing lines", unit="lines", total=nr_in_one_experiment):
+        for reranked_passages in tqdm(reader, desc="Processing lines", unit="lines", total=nr_reranked_examples):
             q_id = reranked_passages[0]
 
             # Extract ids and scores to separate lists from a structure
@@ -101,43 +79,36 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
             # Just extract passage text from ms-marco collection
             psg_text = collection[psg_id]
 
-            out_generate.append(
-                {
-                    "q_id": q_id,
-                    "q_text": queries[q_id],
-                    "psg_id": psg_id,
-                    "psg_text": psg_text,
-                    "psg_type": psg_type
-                }
-            )
+            if q_id not in out_generate or out_generate[q_id]['psg_type'] == 1:
+                out_generate[q_id] = (
+                    {
+                        "q_id": q_id,
+                        "q_text": queries[q_id],
+                        "psg_id": psg_id,
+                        "psg_text": psg_text,
+                        "psg_type": psg_type
+                    }
+                )
 
+            # Check first one highest score, if first not annotated as relevant
+            if psg_type == 1:
+                if not all(batch_scores[0] >= score for score in batch_scores[1:]):
+                    print(batch_scores[0], max(batch_scores[1:]))
+                    exit(999)
+
+            # stats/debugging
             if psg_type == 1 and len(qrels[q_id]) > 0:
                 nr_have_relevant_not_in_batch += 1
                 if nr_debug_prints > 0:
-                    print(f"Passage with id {psg_id} has annotated relevant passage with ids {qrels[q_id]}")
-                    print(f"In batch, ids({len(batch_psgs)}) are: {batch_psgs}")
-
-                    print("\tQuery text:")
-                    print(queries[q_id])
-
-                    print("\tHighest retrieved passages (rank: text):")
-                    for i in range(10):
-                        print(f"{i}: {collection[batch_psgs[i]]}")
-
-                    print(f"\tAnnotated passage texts ({len(qrels[q_id])}):")
-                    for psg_id in qrels[q_id]:
-                        print(collection[psg_id])
-
+                    debug_print(batch_psgs, psg_id, q_id)
                     nr_debug_prints -= 1
-            else:
-                pass
 
     with jsonlines.open(out_file, "w") as writer:
-        writer.write_all(out_generate)
+        writer.write_all(out_generate.values())
 
     # Compute stats
     type_counter = defaultdict(int)
-    for out in out_generate:
+    for out in out_generate.values():
         type_counter[out['psg_type']] += 1
 
     for k, v in type_counter.items():
@@ -154,7 +125,21 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
 
     print(f"Nr of queries with annotated passage not in batch: {nr_have_relevant_not_in_batch}")
 
-# extract_ids_to_extract_relevancy_for()
+
+def debug_print(batch_psgs, psg_id, q_id):
+    print(f"Passage with id {psg_id} has annotated relevant passage with ids {qrels[q_id]}")
+    print(f"In batch, ids({len(batch_psgs)}) are: {batch_psgs}")
+    print("\tQuery text:")
+    print(queries[q_id])
+    print("\tHighest retrieved passages (rank: text):")
+    for i in range(10):
+        print(f"{i}: {collection[batch_psgs[i]]}")
+    print(f"\tAnnotated passage texts ({len(qrels[q_id])}):")
+    for psg_id in qrels[q_id]:
+        print(collection[psg_id])
+
+
+extract_ids_to_extract_relevancy_for()
 
 
 # def count_first_place_annotated():
