@@ -111,12 +111,6 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
                 }
             )
 
-            # Check first one highest score, if first not annotated as  relevant
-            # if len(qrels[q_id]) == 0 or psg_type == 1:
-            #     if not all(batch_scores[0] >= score for score in batch_scores[1:]):
-            #         print(batch_scores[0], max(batch_scores[1:]))
-            #         exit(999)
-
             if psg_type == 1 and len(qrels[q_id]) > 0:
                 nr_have_relevant_not_in_batch += 1
                 if nr_debug_prints > 0:
