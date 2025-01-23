@@ -1,6 +1,7 @@
 import json
 import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 def tokenize_list(tokens, tokenizer):
@@ -58,7 +59,9 @@ def find_spans(text, selected_spans):
 
 class ExplanationsDataset(Dataset):
 
-    def __init__(self, file_path, tokenizer, decode_positive_as_list=False):
+    def __init__(self, file_path, tokenizer, decode_positive_as_list=False, error_on_invalid=False):
+        self.invalid_indexes = []
+        self.error_on_invalid = error_on_invalid
         self.decode_positive_as_list = decode_positive_as_list
         self.tokenizer = tokenizer
         self.file_path = file_path
@@ -78,7 +81,15 @@ class ExplanationsDataset(Dataset):
         :return:
         """
         sample: dict = self.data[idx]
-        tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['positive'], sample['selected_spans'])
+        try:
+            tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['positive'],
+                                                                             sample['selected_spans'])
+        except AssertionError as e:
+            self.invalid_indexes.append(idx)
+            print(f"Error in finding spans: {e}")
+            if self.error_on_invalid:
+                raise e
+            return None, None
 
         return {
             'query': sample['query'],
@@ -107,6 +118,7 @@ class ExplanationsDataset(Dataset):
     def tokenize_with_spans(self, positive_text, selected_spans):
         # Find spans and extract starts and ends
         found_spans = find_spans(positive_text, selected_spans)
+
         spand_starts = torch.tensor([s['start'] for s in found_spans])
         spand_ends = torch.tensor([s['end'] for s in found_spans])
 
@@ -135,16 +147,21 @@ class ExplanationsDataset(Dataset):
 
 if __name__ == "__main__":
     # Example usage
-    # file_path = 'data/29_random_samples_explained.jsonl'
-    file_path = 'data/29_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
-    # file_path = 'data/29_random_samples_gpt-4o-mini-2024-07-18.jsonl'
-    # file_path = 'data/29_random_samples_gpt-4o-2024-08-06.jsonl'
+    # file_path = 'data/35_random_samples_explained.jsonl'
+    # file_path = 'data/35_random_samples_Meta-Llama-3.1-8B-Instruct.jsonl'
+    # file_path = 'data/35_random_samples_gpt-4o-mini-2024-07-18.jsonl'
+    # file_path = 'data/35_random_samples_gpt-4o-2024-08-06.jsonl'
+    # file_path = 'data/35_random_samples_llama3.1:70b-instruct-q4_0.jsonl'
+    # file_path = 'data/35_random_samples_llama2:13b.jsonl'
+    # file_path = 'data/gemma2:27b-instruct-q8_0.jsonl'
+    file_path = 'data/triplets_explained.jsonl'
 
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
     dataset = ExplanationsDataset(file_path, tokenizer, decode_positive_as_list=True)
-    print(dataset[1])
 
     # Iterate through the data
-    for i in range(len(dataset)):
+    for i in tqdm(range(len(dataset))):
         d = dataset[i]
-        print(d)
+        # print(d)
+
+    print(f"Invalid indexes: {dataset.invalid_indexes}")
