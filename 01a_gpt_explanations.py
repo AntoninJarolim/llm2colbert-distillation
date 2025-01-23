@@ -96,6 +96,7 @@ def create_message(query, passage):
     Passage: {passage}
     """
 
+
 def task_from_prompt(custom_id, prompt):
     return {
         "custom_id": custom_id,
@@ -249,7 +250,7 @@ def get_all_responses(generated_data_dir, return_list=False):
 
 
 def get_args():
-    argparse.ArgumentParser(description='Generate explanations for MD2D dataset')
+    argparse.ArgumentParser(description='Generate explanations for MSMARCO dataset')
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--skip_generation", action='store_true',
@@ -258,7 +259,7 @@ def get_args():
     parser.add_argument('--output_data_name', type=str, required=True,
                         help="Name of final output file.")
     parser.add_argument('--input_data_name', type=str, required=True,
-                        help="Name of final output file.")
+                        help="Name of input data file.")
 
     parser.add_argument("--model_name",
                         type=str, default="gpt-4o-2024-08-06",
@@ -351,6 +352,7 @@ def read_out_data(output_data_file) -> list[dict]:
             out_data.append(line)
     return out_data
 
+
 def write_out_data(output_data_file, out_data):
     with jsonlines.open(output_data_file, mode='w') as writer:
         writer.write_all(out_data)
@@ -363,6 +365,7 @@ def update_output(responses_with_keys, output_data_file):
         out_data[k]['selected_spans'] = v['spans']
 
     write_out_data(output_data_file, out_data)
+
 
 def remove_rows_output(output_data_file, indexes_to_remove):
     out_data = read_out_data(output_data_file)
@@ -409,8 +412,11 @@ def main():
 
     if not args.skip_generation:
         prepare_out_dir(generated_data_dir, args.force_rewrite)
-        data_chunks = [{j: input_data[j] for j in range(i, min(i + args.batch_size, len(input_data)))}
-                       for i in range(args.from_sample, args.to_sample, args.batch_size)]
+        data_chunks = [
+            {j: input_data[j]
+             for j in range(i, min(i + args.batch_size, len(input_data)))}
+            for i in range(args.from_sample, args.to_sample, args.batch_size)
+        ]
         generate_all_batches(data_chunks,
                              generation_api,
                              generated_data_dir,
@@ -465,6 +471,7 @@ def main():
             print(f"Exiting because the count of invalid samples "
                   f"was not changed in last {max_regenerate_count} iterations.")
             remove_rows_output(output_data_file, invalid_samples)
+            print(f"Indexes {invalid_samples} were removed from output dataset before exiting.")
             break
 
     print(f"{last_fix} fixes applied, 0 invalid samples ")
