@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 from collections import defaultdict
@@ -5,51 +6,6 @@ from venv import create
 
 import jsonlines
 from tqdm import tqdm
-
-file_path = "colbert_data/qrels.train.tsv"
-qrels = defaultdict(list)
-with open(file_path, "r") as file:
-    for line in file:
-        query_id, _, doc_id, relevance_score = line.strip().split("\t")
-        query_id = int(query_id)  # Convert QueryID to an integer
-        doc_id = int(doc_id)  # Convert DocumentID to an integer
-        relevance_score = int(relevance_score)  # Convert RelevanceScore to an integer
-
-        if relevance_score > 0:
-            qrels[query_id].append(doc_id)
-
-queries_path = "colbert_data/queries.train.tsv"
-queries = {}
-with open(queries_path, "r") as q_file:
-    for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
-        q_id, q = line.strip().split("\t")
-        queries[int(q_id)] = q
-
-queries_path = "colbert_data/collection.tsv"
-collection = defaultdict(str)
-with open(queries_path, "r") as coll_file:
-    for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
-        p_id, d = line.strip().split("\t")
-        collection[int(p_id)] = d
-
-# Following constants are used in some following functions
-file_path = "colbert_data/examples.json"
-nr_reranked_examples = 19409544  # from wc --lines examples.json
-nr_experiments = 24  # by counting nr of q_id in examples.json
-nr_in_one_experiment = nr_reranked_examples / nr_experiments
-
-
-def count_query_observations():
-    q_counts = defaultdict(int)
-    with open(file_path, "r") as file:
-        for line_id, line in tqdm(enumerate(file), desc="Processing lines", unit="lines", total=nr_reranked_examples):
-            if line_id == nr_in_one_experiment:
-                break
-            q_counts[q_id] += 1
-
-            if q_id not in queries:
-                print(f"{q_id} not in train queries set")
-    return q_counts
 
 
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
@@ -141,8 +97,8 @@ def debug_print(batch_psgs, psg_id, q_id):
 
 # extract_ids_to_extract_relevancy_for()
 
-def add_triplets(triplets_explained='data/triplets_explained.jsonl',
-                 generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl"):
+def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
+                          generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl"):
     # q_ids -> generate
     generate_for_id = {}
     with jsonlines.open(generate_relevancy_ids) as reader:
@@ -252,3 +208,62 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
 
 
 create_out_tsv()
+
+def main():
+    parser = argparse.ArgumentParser(description="Command-line tool to perform various data operations.")
+
+    # Flags for each function
+    parser.add_argument("--extract-ids", action="store_true",
+                        help="Extract IDs to generate relevancy for.")
+    parser.add_argument("--unify-triplets-output",
+                        action="store_true",
+                        help="Add triplets to explained triplets data.")
+    parser.add_argument("--create-out-tsv", action="store_true",
+                        help="Create output TSV files from generated relevancy data.")
+
+    args = parser.parse_args()
+
+    # Call functions based on the flags
+    if args.extract_ids:
+        extract_ids_to_extract_relevancy_for()
+    if args.unify_triplets_output:
+        unify_triplets_output()
+    if args.create_out_tsv:
+        create_out_tsv()
+
+
+if __name__ == "__main__":
+    # Load ms marco GT data
+    q_rels_path = "colbert_data/qrels.train.tsv"
+    qrels = defaultdict(list)
+    with open(q_rels_path, "r") as file:
+        for line in file:
+            query_id, _, doc_id, relevance_score = line.strip().split("\t")
+            query_id = int(query_id)  # Convert QueryID to an integer
+            doc_id = int(doc_id)  # Convert DocumentID to an integer
+            relevance_score = int(relevance_score)  # Convert RelevanceScore to an integer
+
+            if relevance_score > 0:
+                qrels[query_id].append(doc_id)
+
+    queries_path = "colbert_data/queries.train.tsv"
+    queries = {}
+    with open(queries_path, "r") as q_file:
+        for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
+            q_id, q = line.strip().split("\t")
+            queries[int(q_id)] = q
+
+    queries_path = "colbert_data/collection.tsv"
+    collection = defaultdict(str)
+    with open(queries_path, "r") as coll_file:
+        for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
+            p_id, d = line.strip().split("\t")
+            collection[int(p_id)] = d
+
+    # Following constants are used in some following functions
+    file_path = "colbert_data/examples.json"
+    nr_reranked_examples = 19409544  # from wc --lines examples.json
+    nr_experiments = 24  # by counting nr of q_id in examples.json
+    nr_in_one_experiment = nr_reranked_examples / nr_experiments
+
+    main()
