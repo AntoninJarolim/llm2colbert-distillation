@@ -75,14 +75,14 @@ class ExplanationsDataset(Dataset):
     def __getitem__(self, idx):
         """
         Each sample has:
-        'positive' passage and 'selected_spans', which needs to be converted to binary vector
+        'psg_id' passage and 'selected_spans', which needs to be converted to binary vector
         of relevance indications
         :param idx:
         :return:
         """
         sample: dict = self.data[idx]
         try:
-            tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['positive'],
+            tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['psg_text'],
                                                                              sample['selected_spans'])
         except AssertionError as e:
             self.invalid_indexes.append(idx)
@@ -92,10 +92,8 @@ class ExplanationsDataset(Dataset):
             return None, None
 
         return {
-            'query': sample['query'],
-            'positive': sample['positive'],
-            'negative': sample['negative'],
-            'tokenized_negative': self.encode_text(sample['negative']),
+            'q_text': sample['q_text'],
+            'psg_text': sample['psg_text'],
             'tokenized_positive': tokenized_positive,
             'tokenized_positive_decoded': self.decode_list(tokenized_positive),
             'rationales': binary_rationales,

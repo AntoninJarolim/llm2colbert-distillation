@@ -207,11 +207,13 @@ def sleep_with_progress(seconds, description=None):
         time.sleep(1)
 
 
-def read_input_data(file_path):
-    with open(file_path, 'r') as f:
-        data = [json.loads(line) for line in f]
-    return data
-
+def read_input_data(file_path, from_sample, to_sample):
+    with jsonlines.open(file_path, 'r') as f:
+        return [
+            line_obj
+            for line_id, line_obj in enumerate(f)
+            if from_sample <= line_id < to_sample
+        ]
 
 def silent_remove(output_data_file):
     try:
@@ -232,7 +234,7 @@ def process_output(process_file):
     return responses
 
 
-def get_all_responses(generated_data_dir, return_list=False):
+def get_all_responses(generated_data_dir):
     """
     :return: Sorted reposes based on custom id
     """
@@ -245,22 +247,28 @@ def get_all_responses(generated_data_dir, return_list=False):
             responses.update(process_output(process_filename))
 
     # Create new list by sorting with keys - rowid, needed to match input
-    responses_out = {k: json.loads(v) for k, v in responses.items()}
-    return [responses_out[row_id] for row_id in responses_out.keys()] if return_list else responses_out
+    return {k: json.loads(v) for k, v in responses.items()}
 
 
 def get_args():
     argparse.ArgumentParser(description='Generate explanations for MSMARCO dataset')
     parser = argparse.ArgumentParser()
 
+    # Task args
     parser.add_argument("--skip_generation", action='store_true',
                         help="only processes each output file")
+    parser.add_argument("--force_rewrite", action="store_true",
+                        help="Disables the check for generating into existing directory.")
 
-    parser.add_argument('--output_data_name', type=str, required=True,
-                        help="Name of final output file.")
+    # Data args
     parser.add_argument('--input_data_name', type=str, required=True,
-                        help="Name of input data file.")
+                        help="Filename to generate relevance extraction data.")
+    parser.add_argument('--input_generated_relevance', type=str, required=True,
+                        help="TSV file having extracted relevance, just to not generate twice.")
+    parser.add_argument('--generate_into_dir', type=str, required=True,
+                        help="Dir where output batches and fixes will be.")
 
+    # Generation setting args
     parser.add_argument("--model_name",
                         type=str, default="gpt-4o-2024-08-06",
                         help="model to use for generation, also used to select folder to process")
@@ -269,10 +277,9 @@ def get_args():
     parser.add_argument("--batch_size", type=int, default=15,
                         help="Batching steps: range(-from-sample, --to-sample, --batch-step)")
 
+    # Generation API args
     parser.add_argument("--use_ollama", action="store_true",
                         help="Instead of OpenAI api, local ollama will be used.")
-    parser.add_argument("--force_rewrite", action="store_true",
-                        help="Disables the check for generating into existing directory.")
 
     return parser.parse_args()
 
@@ -299,7 +306,7 @@ def generate_one_batch_openai(data_chunk, generation_api, jsonl_filename):
 def generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename):
     responses = []
     for row_id, d in tqdm(data_chunk.items(), desc="Generating batch"):
-        response = generation_api(create_message(d["query"], d["positive"]))
+        response = generation_api(create_message(d["q_text"], d["psg_text"]))
         choice = dict(response.choices[0])
         choice['message'] = dict(choice['message'])
         responses.append(
@@ -335,17 +342,18 @@ def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir, us
 
 
 def write_output(responses_out, output_data_file, input_data):
+    silent_remove(output_data_file)
     with jsonlines.open(output_data_file, mode='w') as writer:
-        for input_data, out_selected in zip(input_data, responses_out):
+        for in_key, out_selected in responses_out.items():
             writer.write(
                 {
-                    **input_data,
+                    **input_data[in_key],
                     'selected_spans': out_selected['spans']
                 }
             )
 
 
-def read_out_data(output_data_file) -> list[dict]:
+def read_out_data(output_data_file):
     out_data = []
     with jsonlines.open(output_data_file, mode='r') as reader:
         for line in reader:
@@ -378,7 +386,9 @@ def remove_rows_output(output_data_file, indexes_to_remove):
 
 def find_invalid_samples(output_data_file):
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
-    dataset = ExplanationsDataset(output_data_file, tokenizer, decode_positive_as_list=True)
+    dataset = ExplanationsDataset(output_data_file, tokenizer,
+                                  decode_positive_as_list=True,
+                                  error_on_invalid=True)
     index = 0
     failed_indexes = []
     for i in range(len(dataset)):
@@ -403,32 +413,60 @@ def dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len)
             or not sum(invalid_samples_history[-max_regenerate_count:]) == max_regenerate_count * invalid_len)
 
 
+def load_already_generated(input_generated_relevance):
+    # Key is (q_id, psg_id)
+    already_generated = set()
+    with open(input_generated_relevance) as relevanece_file:
+        for line in relevanece_file:
+            q_id, psg_id, *_ = line.split("\t")
+            already_generated.add((int(q_id), int(psg_id)))
+
+    return already_generated
+
+def create_minibatch(input_data, already_generated, from_sample, batch_size, batch_start, input_data_len):
+    minibatch = {}
+    for data_idx in range(batch_start, min(batch_start + batch_size, input_data_len)):
+        generate_for = input_data[data_idx]
+        q_id, psg_id = generate_for['q_id'], generate_for['psg_id']
+        if (q_id, psg_id) not in already_generated:
+            minibatch[data_idx + from_sample] = input_data[data_idx]
+    return minibatch
+
+def create_batched_input(input_data, already_generated, from_sample, batch_size):
+    input_data_len = len(input_data)
+    data_chunks = [
+        create_minibatch(input_data, already_generated, from_sample, batch_size, batch_start, input_data_len)
+        for batch_start in range(0, input_data_len, batch_size)
+    ]
+    return data_chunks
+
 def main():
     args = get_args()
 
+    # Prepare API
     generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
-    generated_data_dir = os.path.join("data/generated_batches", args.model_name)
-    input_data = read_input_data(args.input_data_name)
 
+    # Read input data
+    input_data = read_input_data(args.input_data_name, args.from_sample, args.to_sample)
+    already_generated = load_already_generated(args.input_generated_relevance)
+
+    # Prepare out data file
+    batch_dir = f'{args.model_name}_from{args.from_sample}-to{args.to_sample}'
+    generated_data_dir = os.path.join(args.generate_into_dir, batch_dir)
     if not args.skip_generation:
         prepare_out_dir(generated_data_dir, args.force_rewrite)
-        data_chunks = [
-            {j: input_data[j]
-             for j in range(i, min(i + args.batch_size, len(input_data)))}
-            for i in range(args.from_sample, args.to_sample, args.batch_size)
-        ]
+        data_chunks = create_batched_input(input_data, already_generated, args.from_sample, args.batch_size)
         generate_all_batches(data_chunks,
                              generation_api,
                              generated_data_dir,
                              args.use_ollama
                              )
 
-    responses_out = get_all_responses(generated_data_dir, return_list=True)
+    responses_out = get_all_responses(generated_data_dir)
 
     # Remove file if exists
-    output_data_file = f"data/{args.output_data_name}"
+    output_data_file = f"data/extracted_relevancy_outs/{batch_dir}.jsonl"
     print(f"Saving output data to {output_data_file}")
-    silent_remove(output_data_file)
     write_output(responses_out, output_data_file, input_data)
 
     last_fix = 0
