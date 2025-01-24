@@ -291,11 +291,11 @@ def get_args():
     return parser.parse_args()
 
 
-def generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama):
-    if use_ollama:
-        generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename)
-    else:
+def generate_one_batch(data_chunk, generation_api, jsonl_filename, generation_client):
+    if client == 'openai':
         generate_one_batch_openai(data_chunk, generation_api, jsonl_filename)
+    else:
+        generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename)
 
 
 def generate_one_batch_openai(data_chunk, generation_api, jsonl_filename):
@@ -331,21 +331,21 @@ def generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename):
         writer.write_all(responses)
 
 
-def generate_all_batches(data_chunks, generation_api, generated_data_dir, use_ollama):
+def generate_all_batches(data_chunks, generation_api, generated_data_dir, generation_client):
     for data_chunk in data_chunks:
         loop_from = list(data_chunk.keys())[0]
         loop_to = list(data_chunk.keys())[-1]
         print(f"Processing {loop_from} to {loop_to}")
         jsonl_filename = create_batch_name(loop_from, loop_from + len(data_chunk), generated_data_dir)
 
-        generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama)
+        generate_one_batch(data_chunk, generation_api, jsonl_filename, generation_client)
 
 
-def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir, use_ollama):
+def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir, generation_client):
     for fix_id, data_chunk in enumerate(data_chunks):
         print(f"Creating {fix_id} fix batch file.")
         jsonl_filename = create_batch_fix_name(fix_id, generated_data_dir)
-        generate_one_batch(data_chunk, generation_api, jsonl_filename, use_ollama)
+        generate_one_batch(data_chunk, generation_api, jsonl_filename, generation_client)
 
 
 def write_output(responses_out, output_data_file, input_data):
@@ -466,7 +466,7 @@ def main():
         generate_all_batches(data_chunks,
                              generation_api,
                              generated_data_dir,
-                             args.use_ollama
+                             args.generation_client
                              )
 
     responses_out = get_all_responses(generated_data_dir)
@@ -502,7 +502,7 @@ def main():
         generate_all_batches_fix(invalid_data_chunks,
                                  generation_api,
                                  fix_data_dir,
-                                 args.use_ollama
+                                 args.generation_client
                                  )
 
         # Update final output file with generated fixes
