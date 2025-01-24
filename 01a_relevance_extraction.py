@@ -13,12 +13,18 @@ from explainable_dataset import ExplanationsDataset
 
 
 class OpenAIGenerator:
-    def __init__(self, model_name, use_ollama=False):
-        if use_ollama:
-            print("Using ollama instead of openAI api!")
+    def __init__(self, model_name, generation_client=False):
+        if generation_client == 'ollama':
+            print("Initialized OLLAMA generation client.")
             self.client = OpenAI(
                 base_url='http://athena20.fit.vutbr.cz:11434/v1',
                 api_key='ollama',
+            )
+        elif generation_client == 'vllm':
+            print("Initialized VLLM generation client.")
+            self.client = OpenAI(
+                base_url="http://localhost:8000/v1",
+                api_key='EMPTY',
             )
         else:
             self.client = OpenAI()
@@ -278,8 +284,9 @@ def get_args():
                         help="Batching steps: range(-from-sample, --to-sample, --batch-step)")
 
     # Generation API args
-    parser.add_argument("--use_ollama", action="store_true",
-                        help="Instead of OpenAI api, local ollama will be used.")
+    parser.add_argument("--generation_client", type=str, choices=['ollama', 'vllm', 'openai'], default='ollama',
+                        help="Specify which generation client should be used. "
+                             "Available: 'ollama', 'vllm', 'openai'")
 
     return parser.parse_args()
 
@@ -444,7 +451,7 @@ def main():
     args = get_args()
 
     # Prepare API
-    generation_api = OpenAIGenerator(args.model_name, use_ollama=args.use_ollama)
+    generation_api = OpenAIGenerator(args.model_name, generation_client=args.generation_client)
 
     # Read input data
     input_data = read_input_data(args.input_data_name, args.from_sample, args.to_sample)
