@@ -1,8 +1,6 @@
 import argparse
-import json
 import os
 from collections import defaultdict
-from venv import create
 
 import jsonlines
 from tqdm import tqdm
@@ -95,8 +93,6 @@ def debug_print(batch_psgs, psg_id, q_id):
         print(collection[psg_id])
 
 
-# extract_ids_to_extract_relevancy_for()
-
 def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
                           generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl"):
     # q_ids -> generate
@@ -141,8 +137,6 @@ def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
 
     print(f"Done counter: {done_counter}")
 
-
-# add_triplets()
 
 def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                    generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl",
@@ -193,12 +187,11 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                 not_yet_generated += 1
                 continue
 
-
             # tsv out file format: `<q_id> <psg_id> <psg_type> <ERS1> <ERS2> ...`
             # ERS - extracted relevancy string
             out_list = [q_id, psg_id, psg_type, *span_list]
             relevancy_out_f.write(
-                '\t'.join([str(obj) for obj in out_list])
+                '\t'.join([str(obj) for obj in out_list]) + "\n"
             )
 
     print(f"Generated {nr_in_one_experiment - not_yet_generated} / {nr_in_one_experiment}")
@@ -206,8 +199,6 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
     print(f"Nr of no relevancy generated: {no_relevance_generated}")
     print(f"Generated twice: {generated_twice}")
 
-
-create_out_tsv()
 
 def main():
     parser = argparse.ArgumentParser(description="Command-line tool to perform various data operations.")
