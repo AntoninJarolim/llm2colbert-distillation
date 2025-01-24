@@ -292,7 +292,7 @@ def get_args():
 
 
 def generate_one_batch(data_chunk, generation_api, jsonl_filename, generation_client):
-    if client == 'openai':
+    if generation_client == 'openai':
         generate_one_batch_openai(data_chunk, generation_api, jsonl_filename)
     else:
         generate_one_batch_ollama(data_chunk, generation_api, jsonl_filename)
