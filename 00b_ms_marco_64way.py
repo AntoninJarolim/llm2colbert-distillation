@@ -1,5 +1,7 @@
 import json
+import os
 from collections import defaultdict
+from venv import create
 
 import jsonlines
 from tqdm import tqdm
@@ -50,7 +52,6 @@ def count_query_observations():
     return q_counts
 
 
-
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
                                          out_file="colbert_data/examples_800k_unique.jsonl"):
     out_generate = {}
@@ -67,12 +68,12 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
             batch_ms_marco_relevant = [psg_id for psg_id in batch_psgs if psg_id in qrels[q_id]]
 
             if len(batch_ms_marco_relevant) > 0:
-                psg_type = 0 # Type 0: From ms marco
+                psg_type = 0  # Type 0: From ms marco
                 psg_id = batch_ms_marco_relevant[0]
                 ranks[batch_psgs.index(psg_id)] += 1
                 # print(batch_docs.index(psg_id))
             else:
-                psg_type = 1 # Type 1: Highest retrieved passage
+                psg_type = 1  # Type 1: Highest retrieved passage
                 psg_id = reranked_passages[1][0]
 
             # Just extract passage text from ms-marco collection
@@ -138,5 +139,116 @@ def debug_print(batch_psgs, psg_id, q_id):
         print(collection[psg_id])
 
 
-extract_ids_to_extract_relevancy_for()
+# extract_ids_to_extract_relevancy_for()
 
+def add_triplets(triplets_explained='data/triplets_explained.jsonl',
+                 generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl"):
+    # q_ids -> generate
+    generate_for_id = {}
+    with jsonlines.open(generate_relevancy_ids) as reader:
+        for generate in reader:
+            generate_for_id[generate['q_id']] = generate['psg_id']
+
+    reverse_search_queries = {}
+    for q_id, q in queries.items():
+        reverse_search_queries[q] = q_id
+
+    reverse_search_collection = {}
+    for p_id, p in collection.items():
+        reverse_search_collection[p] = p_id
+
+    done_counter = 0
+
+    out_data = []
+    with jsonlines.open(triplets_explained) as reader:
+        for triplet in tqdm(reader, desc="Processing lines", unit="lines", total=nr_in_one_experiment):
+            q_id = reverse_search_queries[triplet['query']]
+            p_id = reverse_search_collection[triplet['positive']]
+
+            if generate_for_id[q_id] == p_id:
+                done_counter += 1
+
+                out_data.append(
+                    {
+                        "q_id": q_id,
+                        "q_text": triplet['query'],
+                        "psg_id": p_id,
+                        "psg_text": triplet['positive'],
+                        "psg_type": 0,
+                        "selected_spans": triplet['selected_spans']
+                    }
+                )
+
+    unified_out_file = 'data/extracted_relevancy_outs/triplets_explained_unified.jsonl'
+    with jsonlines.open(unified_out_file, mode="w") as writer:
+        writer.write_all(out_data)
+
+    print(f"Done counter: {done_counter}")
+
+
+# add_triplets()
+
+def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
+                   generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl",
+                   relevancy_out_path='data/extracted_relevancy.tsv'):
+    # indexed by (q_id, psg_id) tuple
+    tsv_out = {}
+    with jsonlines.open(generate_relevancy_ids) as reader:
+        for generate in reader:
+            q_id = generate['q_id']
+            p_id = generate['psg_id']
+            tsv_out[(q_id, p_id)] = (-1, None)
+
+    no_relevance_generated = 0
+    generated_twice = 0
+    for generation_out_file in os.listdir(generation_out_dir):
+        if not generation_out_file.endswith(".jsonl"):
+            print(f"Skipping {generation_out_file}")
+
+        out_file_path = os.path.join(generation_out_dir, generation_out_file)
+        with jsonlines.open(out_file_path) as out_reader:
+            for out_generated in out_reader:
+                generated_key = out_generated['q_id'], out_generated['psg_id']
+                if tsv_out[generated_key][0] != -1:
+                    generated_twice += 1
+                    # print(
+                    #     f"Warning: generated twice: \n\tFirst:\n{out_generated}\n\n\tSecond:\n{tsv_out[generated_key]}"
+                    # )
+
+                # LLM unable to select something which is in text
+                if out_generated['selected_spans'] is None:
+                    no_relevance_generated += 1
+                    continue
+
+                # LLM selected nothing
+                if not out_generated['selected_spans']:
+                    no_relevance_generated += 1
+                    continue
+
+                spans_text = [span['text'] for span in out_generated['selected_spans']]
+                tsv_out[generated_key] = (out_generated['psg_type'], spans_text)
+
+    not_yet_generated = 0
+    with open(relevancy_out_path, mode='w') as relevancy_out_f:
+        for (q_id, psg_id), (psg_type, span_list) in tsv_out.items():
+
+            # Already done
+            if psg_type == -1:
+                not_yet_generated += 1
+                continue
+
+
+            # tsv out file format: `<q_id> <psg_id> <psg_type> <ERS1> <ERS2> ...`
+            # ERS - extracted relevancy string
+            out_list = [q_id, psg_id, psg_type, *span_list]
+            relevancy_out_f.write(
+                '\t'.join([str(obj) for obj in out_list])
+            )
+
+    print(f"Generated {nr_in_one_experiment - not_yet_generated} / {nr_in_one_experiment}")
+    print(f"To generate {not_yet_generated} / {nr_in_one_experiment}")
+    print(f"Nr of no relevancy generated: {no_relevance_generated}")
+    print(f"Generated twice: {generated_twice}")
+
+
+create_out_tsv()
