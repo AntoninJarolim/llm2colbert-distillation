@@ -40,10 +40,6 @@ class OpenAIGenerator:
     def create_message(self, prompt):
         return [
             {
-                "role": "system",
-                "content": self.system_message
-            },
-            {
                 "role": "user",
                 "content": prompt
             }
