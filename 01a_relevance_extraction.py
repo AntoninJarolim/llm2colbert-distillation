@@ -14,16 +14,17 @@ from explainable_dataset import ExplanationsDataset
 
 class OpenAIGenerator:
     def __init__(self, model_name, generation_client=False):
+        url = os.getenv('OPENAI_BASE_URL') + '/v1'
         if generation_client == 'ollama':
             print("Initialized OLLAMA generation client.")
             self.client = OpenAI(
-                base_url='http://athena20.fit.vutbr.cz:11434/v1',
+                base_url=url,
                 api_key='ollama',
             )
         elif generation_client == 'vllm':
             print("Initialized VLLM generation client.")
             self.client = OpenAI(
-                base_url="http://localhost:8000/v1",
+                base_url=url,
                 api_key='EMPTY',
             )
         else:
