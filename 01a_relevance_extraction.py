@@ -454,7 +454,7 @@ def main():
     already_generated = load_already_generated(args.input_generated_relevance)
 
     # Prepare out data file
-    batch_dir = f'{args.model_name}_from{args.from_sample}-to{args.to_sample}'
+    batch_dir = f"{args.model_name.replace('google/', 'google~')}_from{args.from_sample}-to{args.to_sample}"
     generated_data_dir = os.path.join(args.generate_into_dir, batch_dir)
     if not args.skip_generation:
         prepare_out_dir(generated_data_dir, args.force_rewrite)
