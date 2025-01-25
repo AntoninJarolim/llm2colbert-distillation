@@ -333,7 +333,7 @@ def generate_all_batches(data_chunks, generation_api, generated_data_dir, genera
         loop_from = list(data_chunk.keys())[0]
         loop_to = list(data_chunk.keys())[-1]
         print(f"Processing {loop_from} to {loop_to}")
-        jsonl_filename = create_batch_name(loop_from, loop_from + len(data_chunk), generated_data_dir)
+        jsonl_filename = create_batch_name(loop_from, loop_to, generated_data_dir)
 
         generate_one_batch(data_chunk, generation_api, jsonl_filename, generation_client)
 
