@@ -218,6 +218,7 @@ def read_input_data(file_path, from_sample, to_sample):
             if from_sample <= line_id < to_sample
         ]
 
+
 def silent_remove(output_data_file):
     try:
         os.remove(output_data_file)
@@ -404,12 +405,31 @@ def find_invalid_samples(output_data_file):
     return failed_indexes
 
 
+def find_generated_indexes(generated_data_dir):
+    indexes = set()
+    for filename in os.listdir(generated_data_dir):
+        if filename.endswith("_output.jsonl"):
+            with jsonlines.open(os.path.join(generated_data_dir, filename)) as in_file:
+                for parsed_data in in_file:
+                    row_index = int(parsed_data['custom_id'].strip("row_"))
+                    indexes.add(row_index)
+    return indexes
+
+
 def prepare_out_dir(generated_data_dir, force_rewrite):
     try:
         os.makedirs(generated_data_dir)
     except FileExistsError:
-        if not force_rewrite:
-            raise AssertionError(f"Refused to generate data into existing directory: '{generated_data_dir}'.")
+        if force_rewrite:
+            already_generated = find_generated_indexes(generated_data_dir)
+            print(f"Directory {generated_data_dir} already exists.")
+            print(f"Found {len(already_generated)} already generated samples, "
+                  f"skipping {min(already_generated)}-{max(already_generated)} indexes.")
+            return already_generated
+        else:
+            raise FileExistsError(f"Directory {generated_data_dir} already exists. "
+                                  f"Use --force_rewrite to allow writing more samples there.")
+    return set()
 
 
 def dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len):
@@ -427,22 +447,30 @@ def load_already_generated(input_generated_relevance):
 
     return already_generated
 
-def create_minibatch(input_data, already_generated, from_sample, batch_size, batch_start, input_data_len):
+
+def create_minibatch(input_data, already_generated, generated_ids, from_sample, batch_size, batch_start,
+                     input_data_len):
     minibatch = {}
     for data_idx in range(batch_start, min(batch_start + batch_size, input_data_len)):
+        if data_idx in generated_ids:
+            continue
         generate_for = input_data[data_idx]
         q_id, psg_id = generate_for['q_id'], generate_for['psg_id']
         if (q_id, psg_id) not in already_generated:
             minibatch[data_idx + from_sample] = input_data[data_idx]
     return minibatch
 
-def create_batched_input(input_data, already_generated, from_sample, batch_size):
+
+def create_batched_input(input_data, already_generated, generated_ids, from_sample, batch_size):
     input_data_len = len(input_data)
     data_chunks = [
-        create_minibatch(input_data, already_generated, from_sample, batch_size, batch_start, input_data_len)
+        create_minibatch(input_data, already_generated, generated_ids,
+                         from_sample, batch_size, batch_start, input_data_len)
         for batch_start in range(0, input_data_len, batch_size)
     ]
+    data_chunks = [chunk for chunk in data_chunks if chunk]
     return data_chunks
+
 
 def main():
     args = get_args()
@@ -458,8 +486,10 @@ def main():
     batch_dir = f"{args.model_name.replace('google/', 'google~')}_from{args.from_sample}-to{args.to_sample}"
     generated_data_dir = os.path.join(args.generate_into_dir, batch_dir)
     if not args.skip_generation:
-        prepare_out_dir(generated_data_dir, args.force_rewrite)
-        data_chunks = create_batched_input(input_data, already_generated, args.from_sample, args.batch_size)
+        # Create output directory and find already generated data if exists
+        generated_ids = prepare_out_dir(generated_data_dir, args.force_rewrite)
+        data_chunks = create_batched_input(input_data, already_generated, generated_ids,
+                                           args.from_sample, args.batch_size)
         generate_all_batches(data_chunks,
                              generation_api,
                              generated_data_dir,
