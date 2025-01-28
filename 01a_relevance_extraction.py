@@ -452,7 +452,7 @@ def create_minibatch(input_data, already_generated, generated_ids, from_sample, 
                      input_data_len):
     minibatch = {}
     for data_idx in range(batch_start, min(batch_start + batch_size, input_data_len)):
-        if data_idx in generated_ids:
+        if data_idx + from_sample in generated_ids:
             continue
         generate_for = input_data[data_idx]
         q_id, psg_id = generate_for['q_id'], generate_for['psg_id']
