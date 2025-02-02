@@ -244,14 +244,29 @@ def get_all_responses(generated_data_dir):
     """
     # row_id -> index, content -> value
     responses = {}
+    files_to_process = []
     for filename in os.listdir(generated_data_dir):
         if filename.endswith("_output.jsonl"):
             process_filename = f"{generated_data_dir}/{filename}"
-            print(f"Processing {process_filename}")
-            responses.update(process_output(process_filename))
+            files_to_process.append(process_filename)
+
+    for process_filename in tqdm(files_to_process, desc="Processing output files"):
+        responses.update(process_output(process_filename))
+
+    json_decode_error = 0
+    def decode_one(v):
+        try:
+            return json.loads(v)
+        except json.JSONDecodeError:
+            nonlocal json_decode_error
+            json_decode_error += 1
+            return {'spans': []}
+
 
     # Create new list by sorting with keys - rowid, needed to match input
-    return {k: json.loads(v) for k, v in responses.items()}
+    outs = {k: decode_one(v) for k, v in responses.items()}
+    print(f"JSON decode error count: {json_decode_error}")
+    return outs
 
 
 def get_args():
@@ -346,13 +361,13 @@ def generate_all_batches_fix(data_chunks, generation_api, generated_data_dir, ge
         generate_one_batch(data_chunk, generation_api, jsonl_filename, generation_client)
 
 
-def write_output(responses_out, output_data_file, input_data):
+def write_output(responses_out, output_data_file, input_data, from_sample):
     silent_remove(output_data_file)
     with jsonlines.open(output_data_file, mode='w') as writer:
         for in_key, out_selected in responses_out.items():
             writer.write(
                 {
-                    **input_data[in_key],
+                    **input_data[in_key - from_sample],
                     'selected_spans': out_selected['spans']
                 }
             )
@@ -396,7 +411,7 @@ def find_invalid_samples(output_data_file):
                                   error_on_invalid=True)
     index = 0
     failed_indexes = []
-    for i in range(len(dataset)):
+    for i in tqdm(range(len(dataset)), desc="Finding invalid inputs", unit="samples"):
         try:
             dataset[i]
         except AssertionError:
@@ -501,7 +516,7 @@ def main():
     # Remove file if exists
     output_data_file = f"data/extracted_relevancy_outs/{batch_dir}.jsonl"
     print(f"Saving output data to {output_data_file}")
-    write_output(responses_out, output_data_file, input_data)
+    write_output(responses_out, output_data_file, input_data, args.from_sample)
 
     last_fix = 0
     # Find all fix directories in the target directory

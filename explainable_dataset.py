@@ -85,10 +85,10 @@ class ExplanationsDataset(Dataset):
             tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['psg_text'],
                                                                              sample['selected_spans'])
         except AssertionError as e:
-            self.invalid_indexes.append(idx)
-            print(f"Error in finding spans: {e}")
             if self.error_on_invalid:
                 raise e
+            self.invalid_indexes.append(idx)
+            print(f"Error in finding spans: {e}")
             return None, None
 
         return {
