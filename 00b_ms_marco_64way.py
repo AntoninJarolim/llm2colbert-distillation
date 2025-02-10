@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
-                                         out_file="colbert_data/examples_800k_unique.jsonl"):
+                                         out_file="data/input/64_way/examples_800k_unique.jsonl"):
     out_generate = {}
     ranks = defaultdict(int)
     nr_debug_prints = 1
@@ -94,7 +94,7 @@ def debug_print(batch_psgs, psg_id, q_id):
 
 
 def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
-                          generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl"):
+                          generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl"):
     # q_ids -> generate
     generate_for_id = {}
     with jsonlines.open(generate_relevancy_ids) as reader:
@@ -139,7 +139,7 @@ def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
 
 
 def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
-                   generate_relevancy_ids="colbert_data/examples_800k_unique.jsonl",
+                   generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl",
                    relevancy_out_path='data/extracted_relevancy.tsv'):
     # indexed by (q_id, psg_id) tuple
     tsv_out = {}
