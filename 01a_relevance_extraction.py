@@ -414,11 +414,11 @@ def update_output_spans(responses_with_keys, output_data_file):
     write_out_data(output_data_file, out_data)
 
 
-def remove_output_rows(output_data_file, indexes_to_remove):
+def annotate_failed_extraction(output_data_file, indexes_to_remove):
     out_data = read_out_data(output_data_file)
 
     for remove_idx in indexes_to_remove:
-        out_data[remove_idx]['selected_spans'] = None
+        out_data[remove_idx]['extraction_error'] = True
 
     write_out_data(output_data_file, out_data)
 
@@ -601,7 +601,7 @@ def main():
             break
 
     invalid_samples = find_invalid_samples(output_data_file, invalid_samples)
-    remove_output_rows(output_data_file, invalid_samples)
+    annotate_failed_extraction(output_data_file, invalid_samples)
     print(f"{last_fix} fixes applied, {len(invalid_samples)} were removed from output dataset before exiting")
 
 
