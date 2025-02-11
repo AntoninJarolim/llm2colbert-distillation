@@ -3,6 +3,7 @@ import os
 from collections import defaultdict
 
 import jsonlines
+from pydantic.v1.errors import IterableError
 from tqdm import tqdm
 
 
@@ -137,6 +138,13 @@ def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
 
     print(f"Done counter: {done_counter}")
 
+def write_tsv_line(relevancy_out_f, q_id, psg_id, psg_type, span_list):
+    # tsv out file format: `<q_id> <psg_id> <psg_type> <ERS1> <ERS2> ...`
+    # ERS - extracted relevancy string
+    out_list = [q_id, psg_id, psg_type, *span_list]
+    relevancy_out_f.write(
+        '\t'.join([str(obj) for obj in out_list]) + "\n"
+    )
 
 def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                    generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl",
@@ -147,8 +155,9 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
         for generate in reader:
             q_id = generate['q_id']
             p_id = generate['psg_id']
-            tsv_out[(q_id, p_id)] = (-1, None)
+            tsv_out[(q_id, p_id)] = (-1, None, None)
 
+    generated_twice_counter = 0
     # Read the generated relevancy data in files a folder
     for generation_out_file in os.listdir(generation_out_dir):
         if not generation_out_file.endswith(".jsonl"):
@@ -163,50 +172,57 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
 
                 # LLM generated twice (why?)
                 if tsv_out[generated_key][0] != -1:
-                    tsv_out[generated_key] = (-4, [])
+                    generated_twice_counter += 1
                     continue
 
-                # LLM unable to select something which is in text
-                if out_generated['selected_spans'] is None:
-                    tsv_out[generated_key] = (-3, [])
-                    continue
 
-                # LLM selected nothing
-                if not out_generated['selected_spans']:
-                    tsv_out[generated_key] = (-2, [])
-                    continue
+                if 'extraction_error' in out_generated and out_generated['extraction_error']:
+                    # LLM unable to select something which is in text
+                    psg_type = -3
+                elif not out_generated['selected_spans']:
+                    # LLM selected nothing
+                    psg_type = -2
+                else:
+                    psg_type = out_generated['psg_type']
 
-                spans_text = [span['text'] for span in out_generated['selected_spans']]
-                tsv_out[generated_key] = (out_generated['psg_type'], spans_text)
+                try:
+                    spans_text = [span['text'] for span in out_generated['selected_spans']]
+                except:
+                    spans_text = []
 
-    not_yet_generated = 0
-    out_type_counter = defaultdict(int)
+                tsv_out[generated_key] = (psg_type, spans_text, out_generated['psg_type'])
+
+    error_counter = {0: defaultdict(int), 1: defaultdict(int)}
     with open(relevancy_out_path, mode='w') as relevancy_out_f:
-        for (q_id, psg_id), (psg_type, span_list) in tsv_out.items():
+        for (q_id, psg_id), (out_psg_type, span_list, in_psg_type) in tsv_out.items():
+            error_counter[in_psg_type][out_psg_type] += 1
 
-            # -1 is default value
-            if psg_type == -1:
-                not_yet_generated += 1
-                continue
+            if out_psg_type >= 0:
+                write_tsv_line(relevancy_out_f, q_id, psg_id, out_psg_type, span_list)
 
-            # tsv out file format: `<q_id> <psg_id> <psg_type> <ERS1> <ERS2> ...`
-            # ERS - extracted relevancy string
-            out_list = [q_id, psg_id, psg_type, *span_list]
-            relevancy_out_f.write(
-                '\t'.join([str(obj) for obj in out_list]) + "\n"
-            )
-            out_type_counter[psg_type] += 1
+    total_to_generate = error_counter[0][-1] + error_counter[1][-1]
+    total_generated = nr_in_one_experiment - total_to_generate
+    total_failed = error_counter[0][-3] + error_counter[1][-3]
+    total_nothing = error_counter[0][-2] + error_counter[1][-2]
 
-    total_generated = nr_in_one_experiment - not_yet_generated
-    print(f"Stats for {relevancy_out_path} ")
-    print(f"\t Generated + not yet generated / total:\t {total_generated:.0f}+{not_yet_generated}/{nr_in_one_experiment:.0f}")
-    print(f"\t err - generated twice: {out_type_counter[-4]}")
-    print(f"\t err - LLM failed to generate correct extraction span: {out_type_counter[-3]}")
-    print(f"\t err - LLM selected nothing: {out_type_counter[-2]}")
+    any_ms_marco = sum(error_counter[0].values())
+    any_top_one = sum(error_counter[1].values())
+
+    print(f"Stats for {relevancy_out_path}")
+    print(f"\t Generated + not yet generated / total:\t {total_generated:.0f}+{total_to_generate}/{nr_in_one_experiment:.0f}")
+    print(f"\t err - generated twice: {generated_twice_counter}")
+
+    print(f"\t err - LLM failed to generate correct extraction span: {total_failed}")
+    print(f"\t\t ms-marco annotated: {error_counter[0][-3]}/{any_ms_marco} ({error_counter[0][-3] / any_ms_marco:.4f})")
+    print(f"\t\t Top-1 retrieved: {error_counter[1][-3]}/{any_top_one} ({error_counter[1][-3] / any_top_one:.4f})")
+
+    print(f"\t err - LLM selected nothing: {total_nothing}")
+    print(f"\t\t ms-marco annotated: {error_counter[0][-2]}/{any_ms_marco} ({error_counter[0][-2] / any_ms_marco:.4f})")
+    print(f"\t\t Top-1 retrieved: {error_counter[1][-2]}/{any_top_one} ({error_counter[1][-2] / any_top_one:.4f})")
     print()
-    print(f"\t MS-marco annotated relevant: {out_type_counter[0]}")
-    print(f"\t Top-1 retrieved relevant: {out_type_counter[1]}")
-    print(f"\t Correctly generated: {out_type_counter[0] + out_type_counter[1]} / {total_generated}")
+    print(f"\t MS-marco annotated: {error_counter[0][0]}")
+    print(f"\t Top-1 retrieved: {error_counter[1][1]}")
+    print(f"\t \t-> correctly generated: {error_counter[0][0] + error_counter[1][1]} / {total_generated}")
 
 
 def main():
