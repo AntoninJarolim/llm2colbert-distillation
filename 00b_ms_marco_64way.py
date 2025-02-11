@@ -149,40 +149,42 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
             p_id = generate['psg_id']
             tsv_out[(q_id, p_id)] = (-1, None)
 
-    no_relevance_generated = 0
-    generated_twice = 0
+    # Read the generated relevancy data in files a folder
     for generation_out_file in os.listdir(generation_out_dir):
         if not generation_out_file.endswith(".jsonl"):
             print(f"Skipping {generation_out_file}")
+            continue
 
         out_file_path = os.path.join(generation_out_dir, generation_out_file)
+        # Read the generated relevancy data in one file
         with jsonlines.open(out_file_path) as out_reader:
             for out_generated in out_reader:
                 generated_key = out_generated['q_id'], out_generated['psg_id']
+
+                # LLM generated twice (why?)
                 if tsv_out[generated_key][0] != -1:
-                    generated_twice += 1
-                    # print(
-                    #     f"Warning: generated twice: \n\tFirst:\n{out_generated}\n\n\tSecond:\n{tsv_out[generated_key]}"
-                    # )
+                    tsv_out[generated_key] = (-4, [])
+                    continue
 
                 # LLM unable to select something which is in text
                 if out_generated['selected_spans'] is None:
-                    no_relevance_generated += 1
+                    tsv_out[generated_key] = (-3, [])
                     continue
 
                 # LLM selected nothing
                 if not out_generated['selected_spans']:
-                    no_relevance_generated += 1
+                    tsv_out[generated_key] = (-2, [])
                     continue
 
                 spans_text = [span['text'] for span in out_generated['selected_spans']]
                 tsv_out[generated_key] = (out_generated['psg_type'], spans_text)
 
     not_yet_generated = 0
+    out_type_counter = defaultdict(int)
     with open(relevancy_out_path, mode='w') as relevancy_out_f:
         for (q_id, psg_id), (psg_type, span_list) in tsv_out.items():
 
-            # Already done
+            # -1 is default value
             if psg_type == -1:
                 not_yet_generated += 1
                 continue
@@ -193,11 +195,18 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
             relevancy_out_f.write(
                 '\t'.join([str(obj) for obj in out_list]) + "\n"
             )
+            out_type_counter[psg_type] += 1
 
-    print(f"Generated {nr_in_one_experiment - not_yet_generated} / {nr_in_one_experiment}")
-    print(f"To generate {not_yet_generated} / {nr_in_one_experiment}")
-    print(f"Nr of no relevancy generated: {no_relevance_generated}")
-    print(f"Generated twice: {generated_twice}")
+    total_generated = nr_in_one_experiment - not_yet_generated
+    print(f"Stats for {relevancy_out_path} ")
+    print(f"\t Generated + not yet generated / total:\t {total_generated:.0f}+{not_yet_generated}/{nr_in_one_experiment:.0f}")
+    print(f"\t err - generated twice: {out_type_counter[-4]}")
+    print(f"\t err - LLM failed to generate correct extraction span: {out_type_counter[-3]}")
+    print(f"\t err - LLM selected nothing: {out_type_counter[-2]}")
+    print()
+    print(f"\t MS-marco annotated relevant: {out_type_counter[0]}")
+    print(f"\t Top-1 retrieved relevant: {out_type_counter[1]}")
+    print(f"\t Correctly generated: {out_type_counter[0] + out_type_counter[1]} / {total_generated}")
 
 
 def main():
