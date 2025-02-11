@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import time
+import re
 from datetime import datetime
 
 from jsonlines import jsonlines
@@ -238,22 +239,41 @@ def process_output(process_file):
     return responses
 
 
-def get_all_responses(generated_data_dir):
+def get_sorted_generation_files(generated_data_dir):
     """
-    :return: Sorted reposes based on custom id
+    Loads files from the directory and sorts them based on:
+        batch for fix:        2025-02-02T14:58:08_batch_0_output.jsonl (0 here)
+        batch for generation: 2025-02-02T14:58:08_batch-100-200_output.jsonl (100 here)
+
+    :param generated_data_dir: Directory path for fix/generation files
+    :return: Sorted list of files to
     """
-    # row_id -> index, content -> value
-    responses = {}
+
     files_to_process = []
     for filename in os.listdir(generated_data_dir):
         if filename.endswith("_output.jsonl"):
             process_filename = f"{generated_data_dir}/{filename}"
             files_to_process.append(process_filename)
 
-    for process_filename in tqdm(files_to_process, desc="Processing output files"):
+    # first number after batch- or batch_ is used for sorting
+    pattern = r"batch[_-](\d+)"
+    return sorted(files_to_process, key=lambda x: int(re.search(pattern, x.split("/")[-1]).group(1)))
+
+
+def get_all_responses(generated_data_dir):
+    """
+    :return: Sorted reposes based on custom id
+    """
+    # row_id -> index, content -> value
+    responses = {}
+
+    files_to_process = get_sorted_generation_files(generated_data_dir)
+
+    for process_filename in tqdm(files_to_process, desc=f"Processing output files in {generated_data_dir}"):
         responses.update(process_output(process_filename))
 
     json_decode_error = 0
+
     def decode_one(v):
         try:
             return json.loads(v)
@@ -261,7 +281,6 @@ def get_all_responses(generated_data_dir):
             nonlocal json_decode_error
             json_decode_error += 1
             return {'spans': []}
-
 
     # Create new list by sorting with keys - rowid, needed to match input
     outs = {k: decode_one(v) for k, v in responses.items()}
@@ -386,7 +405,7 @@ def write_out_data(output_data_file, out_data):
         writer.write_all(out_data)
 
 
-def update_output(responses_with_keys, output_data_file):
+def update_output_spans(responses_with_keys, output_data_file):
     out_data = read_out_data(output_data_file)
 
     for k, v in responses_with_keys.items():
@@ -395,7 +414,7 @@ def update_output(responses_with_keys, output_data_file):
     write_out_data(output_data_file, out_data)
 
 
-def remove_rows_output(output_data_file, indexes_to_remove):
+def remove_output_rows(output_data_file, indexes_to_remove):
     out_data = read_out_data(output_data_file)
 
     for remove_idx in indexes_to_remove:
@@ -404,19 +423,20 @@ def remove_rows_output(output_data_file, indexes_to_remove):
     write_out_data(output_data_file, out_data)
 
 
-def find_invalid_samples(output_data_file):
+def find_invalid_samples(output_data_file, last_invalid_indexes):
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
     dataset = ExplanationsDataset(output_data_file, tokenizer,
                                   decode_positive_as_list=True,
                                   error_on_invalid=True)
-    index = 0
+
     failed_indexes = []
     for i in tqdm(range(len(dataset)), desc="Finding invalid inputs", unit="samples"):
         try:
+            if last_invalid_indexes and i not in last_invalid_indexes:
+                continue
             dataset[i]
         except AssertionError:
-            failed_indexes.append(index)
-        index += 1
+            failed_indexes.append(i)
     return failed_indexes
 
 
@@ -450,6 +470,18 @@ def prepare_out_dir(generated_data_dir, force_rewrite):
 def dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len):
     return (len(invalid_samples_history) < max_regenerate_count
             or not sum(invalid_samples_history[-max_regenerate_count:]) == max_regenerate_count * invalid_len)
+
+
+def find_sorted_fix_dirs(generated_data_dir):
+    # Find all fix directories in the target directory
+    fix_dirs = []
+    for item in os.listdir(generated_data_dir):
+        existing_fix_path = os.path.join(generated_data_dir, item)
+        if os.path.isdir(existing_fix_path) and item.startswith('fix_'):
+            fix_dirs.append(existing_fix_path)
+    # Apply fixes in the correct order
+    fix_dirs = sorted(fix_dirs, key=lambda x: int(x.split('_')[-1]))
+    return fix_dirs
 
 
 def load_already_generated(input_generated_relevance):
@@ -491,7 +523,10 @@ def main():
     args = get_args()
 
     # Prepare API
-    generation_api = OpenAIGenerator(args.model_name, generation_client=args.generation_client)
+    if not args.skip_generation:
+        generation_api = OpenAIGenerator(args.model_name, generation_client=args.generation_client)
+    else:
+        generation_api = None
 
     # Read input data
     input_data = read_input_data(args.input_data_name, args.from_sample, args.to_sample)
@@ -518,18 +553,24 @@ def main():
     print(f"Saving output data to {output_data_file}")
     write_output(responses_out, output_data_file, input_data, args.from_sample)
 
+    fix_dirs = find_sorted_fix_dirs(generated_data_dir)
     last_fix = 0
-    # Find all fix directories in the target directory
-    for item in os.listdir(generated_data_dir):
-        existing_fix_path = os.path.join(generated_data_dir, item)
-        if os.path.isdir(existing_fix_path) and item.startswith('fix_'):
-            responses_out = get_all_responses(existing_fix_path)
-            update_output(responses_out, output_data_file)
-            last_fix += 1
+    invalid_samples = None
+    for fix_dir in fix_dirs:
+        invalid_samples = find_invalid_samples(output_data_file, invalid_samples)
+        print(f"{last_fix} fixes applied, {len(invalid_samples)} were removed from output dataset before exiting")
+
+        responses_out = get_all_responses(fix_dir)
+        # assert sorted(list(responses_out.keys())) == sorted(invalid_samples)
+        update_output_spans(responses_out, output_data_file)
+        last_fix += 1
+
+    print(f"Found {last_fix} fix files.")
 
     invalid_samples_history = []
     max_regenerate_count = 5
-    while (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file))) > 0:
+    while (not args.skip_generation
+           and (invalid_len := len(invalid_samples := find_invalid_samples(output_data_file, invalid_samples))) > 0):
         print(f"Version after {last_fix} fixes has {invalid_len} invalid samples. "
               f"Trying to fix following indexes.")
         print(invalid_samples)
@@ -549,7 +590,7 @@ def main():
 
         # Update final output file with generated fixes
         responses_out = get_all_responses(fix_data_dir)
-        update_output(responses_out, output_data_file)
+        update_output_spans(responses_out, output_data_file)
         last_fix += 1
 
         # Exit loop if N numbers of tries did not improve dataset
@@ -557,11 +598,11 @@ def main():
         if not dataset_improved(invalid_samples_history, max_regenerate_count, invalid_len):
             print(f"Exiting because the count of invalid samples "
                   f"was not changed in last {max_regenerate_count} iterations.")
-            remove_rows_output(output_data_file, invalid_samples)
-            print(f"Indexes {invalid_samples} were removed from output dataset before exiting.")
             break
 
-    print(f"{last_fix} fixes applied, 0 invalid samples ")
+    invalid_samples = find_invalid_samples(output_data_file, invalid_samples)
+    remove_output_rows(output_data_file, invalid_samples)
+    print(f"{last_fix} fixes applied, {len(invalid_samples)} were removed from output dataset before exiting")
 
 
 if __name__ == "__main__":
