@@ -8,13 +8,18 @@ import text_utils
 
 
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
+                                         out_selected_examples="colbert_data/examples_800k_unique_raw.jsonl",
                                          out_file="data/input/64_way/examples_800k_unique.jsonl"):
     out_generate = {}
+    out_generate_examples = {}
     ranks = defaultdict(int)
     nr_debug_prints = 1
     nr_have_relevant_not_in_batch = 0
     with jsonlines.open(input_file) as reader:
-        for reranked_passages in tqdm(reader, desc="Processing lines", unit="lines", total=nr_reranked_examples):
+        for example_index, reranked_passages in tqdm(enumerate(reader),
+                                                     desc="Processing lines",
+                                                     unit="lines",
+                                                     total=nr_reranked_examples):
             q_id = reranked_passages[0]
 
             # Extract ids and scores to separate lists from a structure
@@ -35,6 +40,7 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
             psg_text = collection[psg_id]
 
             if q_id not in out_generate or out_generate[q_id]['psg_type'] == 1:
+                out_generate_examples[q_id] = reranked_passages
                 out_generate[q_id] = (
                     {
                         "q_id": q_id,
@@ -60,6 +66,9 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
 
     with jsonlines.open(out_file, "w") as writer:
         writer.write_all(out_generate.values())
+
+    with jsonlines.open(out_selected_examples, "w") as writer:
+        writer.write_all(out_generate_examples.values())
 
     # Compute stats
     type_counter = defaultdict(int)
