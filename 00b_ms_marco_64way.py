@@ -163,6 +163,57 @@ def validate_out_tsv(relevancy_out_path):
 
     print("Validation of out tsv passed.")
 
+def find_success(text, spans):
+    # Ensure that the spans are not valid at the start
+    try:
+        text_utils.find_spans(text, spans)
+        return True
+    except AssertionError:
+        return False
+
+def two_spans_diff(span1, span2):
+    return sum(c1 != c2 for c1, c2 in zip(span1, span2)) + abs(len(span1) - len(span2))
+
+def heuristic_finding(text, span):
+    """Tries to modify as little as possible chars in span_text so it is in text after modification"""
+    span_start = text_utils.find_span_start_index(text.lower(), span.lower())
+    if span_start == -1:
+        print(f"\t\t text: '{text}'")
+        print(f"\t\t span: '{span}'")
+        print()
+        return span
+
+    found_text_span = text[span_start:span_start + len(span)]
+    diff_chars = two_spans_diff(found_text_span, span)
+    # print(f"\n\t text: '{text}'")
+    # print(f"\t\t modified({diff_chars}):")
+    # print(f"\t\t\t '{span}' to")
+    # print(f"\t\t\t '{found_text_span}' ")
+
+    if diff_chars <= 10:
+        return found_text_span
+    return span
+
+
+def try_find_spans(text, spans):
+    # Ensure that the spans are not valid at the start
+    assert not find_success(text, spans)
+
+
+    # Try to find the spans with modified text
+    modified_spans = []
+    for span in spans:
+        if not find_success(text, [span]):
+            # Modify span if not found directly
+            span['text'] = heuristic_finding(text, span['text'])
+        modified_spans.append(span)
+
+    # Return modified spans in case of success
+    if find_success(text, modified_spans):
+        return modified_spans
+    return None
+
+
 def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                    generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl",
                    relevancy_out_path='data/extracted_relevancy.tsv'):
@@ -195,9 +246,17 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
 
                 if 'extraction_error' in out_generated and out_generated['extraction_error']:
                     # LLM unable to select something which is in text
-                    psg_type = -3
+                    modified_spans = try_find_spans(out_generated['psg_text'], out_generated['selected_spans'])
+                    if modified_spans:
+                        out_generated['selected_spans'] = modified_spans
+                        # psg_type == 2: from MS marco, fixed by heuristic
+                        # psg_type == 3: top-1 retrieved, fixed by heuristic
+                        psg_type = out_generated['psg_type'] + 2
+                    else:
+                        psg_type = -3
                 elif out_generated['selected_spans'] is None:
                     # LLM unable to select something which is in text
+                    # selected spans are not available for this query
                     psg_type = -3
                     out_generated['selected_spans'] = []
                 elif not out_generated['selected_spans']:
@@ -242,9 +301,16 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
     print(f"\t\t ms-marco annotated: {error_counter[0][-2]}/{any_ms_marco} ({error_counter[0][-2] / any_ms_marco:.4f})")
     print(f"\t\t Top-1 retrieved: {error_counter[1][-2]}/{any_top_one} ({error_counter[1][-2] / any_top_one:.4f})")
     print()
+
+    print(f"\t modified MS marco - {error_counter[0][2]}")
+    print(f"\t modified top-1 retrieved - {error_counter[1][3]}")
+
+    print()
     print(f"\t MS-marco annotated: {error_counter[0][0]}")
     print(f"\t Top-1 retrieved: {error_counter[1][1]}")
-    print(f"\t \t-> correctly generated: {error_counter[0][0] + error_counter[1][1]} / {total_generated}")
+    correctly_generated = error_counter[0][0] + error_counter[1][1] + error_counter[0][2] + error_counter[1][3]
+    print(f"\t \t-> correctly generated: {correctly_generated} / {total_generated} "
+          f"({correctly_generated / total_generated:.4f})")
 
     validate_out_tsv(relevancy_out_path)
 
