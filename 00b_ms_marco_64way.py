@@ -3,8 +3,8 @@ import os
 from collections import defaultdict
 
 import jsonlines
-from pydantic.v1.errors import IterableError
 from tqdm import tqdm
+import text_utils
 
 
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
@@ -146,6 +146,23 @@ def write_tsv_line(relevancy_out_f, q_id, psg_id, psg_type, span_list):
         '\t'.join([str(obj) for obj in out_list]) + "\n"
     )
 
+
+def validate_out_tsv(relevancy_out_path):
+    collection = load_collection()
+
+    with open(relevancy_out_path, mode='r') as relevancy_out_f:
+        for line in relevancy_out_f:
+            q_id, psg_id, psg_type, *span_list = line.strip().split('\t')
+            q_id, psg_id, psg_type = int(q_id), int(psg_id), int(psg_type)
+
+            assert psg_type >= 0, f"psg_type is negative: {psg_type}"
+            assert len(span_list) > 0, f"No spans selected {q_id}"
+
+            passage_text = collection[psg_id]
+            text_utils.find_spans(passage_text, span_list)
+
+    print("Validation of out tsv passed.")
+
 def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                    generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl",
                    relevancy_out_path='data/extracted_relevancy.tsv'):
@@ -179,16 +196,20 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                 if 'extraction_error' in out_generated and out_generated['extraction_error']:
                     # LLM unable to select something which is in text
                     psg_type = -3
+                elif out_generated['selected_spans'] is None:
+                    # LLM unable to select something which is in text
+                    psg_type = -3
+                    out_generated['selected_spans'] = []
                 elif not out_generated['selected_spans']:
                     # LLM selected nothing
                     psg_type = -2
                 else:
                     psg_type = out_generated['psg_type']
 
-                try:
-                    spans_text = [span['text'] for span in out_generated['selected_spans']]
-                except:
-                    spans_text = []
+                spans_text = [span['text'] for span in out_generated['selected_spans']]
+                if psg_type >= 0 and not any([any([c.isalnum() for c in span]) for span in spans_text]):
+                    # print(f"failed to find something alnum in this: {spans_text} for query {queries[out_generated['q_id']]}")
+                    psg_type = -4
 
                 tsv_out[generated_key] = (psg_type, spans_text, out_generated['psg_type'])
 
@@ -211,6 +232,7 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
     print(f"Stats for {relevancy_out_path}")
     print(f"\t Generated + not yet generated / total:\t {total_generated:.0f}+{total_to_generate}/{nr_in_one_experiment:.0f}")
     print(f"\t err - generated twice: {generated_twice_counter}")
+    print("\t err - not alphanumeric in selected spans: ", error_counter[0][-4] + error_counter[1][-4])
 
     print(f"\t err - LLM failed to generate correct extraction span: {total_failed}")
     print(f"\t\t ms-marco annotated: {error_counter[0][-3]}/{any_ms_marco} ({error_counter[0][-3] / any_ms_marco:.4f})")
@@ -224,8 +246,9 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
     print(f"\t Top-1 retrieved: {error_counter[1][1]}")
     print(f"\t \t-> correctly generated: {error_counter[0][0] + error_counter[1][1]} / {total_generated}")
 
+    validate_out_tsv(relevancy_out_path)
 
-def main():
+def arg_parse():
     parser = argparse.ArgumentParser(description="Command-line tool to perform various data operations.")
 
     # Flags for each function
@@ -237,18 +260,29 @@ def main():
     parser.add_argument("--create-out-tsv", action="store_true",
                         help="Create output TSV files from generated relevancy data.")
 
-    args = parser.parse_args()
-
-    # Call functions based on the flags
-    if args.extract_ids:
-        extract_ids_to_extract_relevancy_for()
-    if args.unify_triplets_output:
-        unify_triplets_output()
-    if args.create_out_tsv:
-        create_out_tsv()
+    return parser.parse_args()
 
 
-if __name__ == "__main__":
+def load_queries():
+    queries = {}
+    queries_path = "colbert_data/queries.train.tsv"
+    with open(queries_path, "r") as q_file:
+        for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
+            q_id, q = line.strip().split("\t")
+            queries[int(q_id)] = q
+    return queries
+
+
+def load_collection():
+    queries_path = "colbert_data/collection.tsv"
+    collection = defaultdict(str)
+    with open(queries_path, "r") as coll_file:
+        for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
+            p_id, d = line.strip().split("\t")
+            collection[int(p_id)] = d
+    return collection
+
+def load_qrels():
     # Load ms marco GT data
     q_rels_path = "colbert_data/qrels.train.tsv"
     qrels = defaultdict(list)
@@ -261,25 +295,26 @@ if __name__ == "__main__":
 
             if relevance_score > 0:
                 qrels[query_id].append(doc_id)
+    return qrels
 
-    queries_path = "colbert_data/queries.train.tsv"
-    queries = {}
-    with open(queries_path, "r") as q_file:
-        for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
-            q_id, q = line.strip().split("\t")
-            queries[int(q_id)] = q
 
-    queries_path = "colbert_data/collection.tsv"
-    collection = defaultdict(str)
-    with open(queries_path, "r") as coll_file:
-        for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
-            p_id, d = line.strip().split("\t")
-            collection[int(p_id)] = d
-
+if __name__ == "__main__":
     # Following constants are used in some following functions
     file_path = "colbert_data/examples.json"
     nr_reranked_examples = 19409544  # from wc --lines examples.json
     nr_experiments = 24  # by counting nr of q_id in examples.json
     nr_in_one_experiment = nr_reranked_examples / nr_experiments
 
-    main()
+    args = arg_parse()
+
+    # Call functions based on the flags
+    if args.extract_ids:
+        qrels = load_qrels()
+        queries = load_queries()
+        collection = load_collection()
+
+        extract_ids_to_extract_relevancy_for()
+    if args.unify_triplets_output:
+        unify_triplets_output()
+    if args.create_out_tsv:
+        create_out_tsv()
