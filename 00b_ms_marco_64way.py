@@ -3,13 +3,15 @@ import os
 from collections import defaultdict
 
 import jsonlines
+from boltons.iterutils import unique
 from tqdm import tqdm
 import text_utils
+import random
 
 
 def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
-                                         out_selected_examples="colbert_data/examples_800k_unique_raw.jsonl",
-                                         out_file="data/input/64_way/examples_800k_unique.jsonl"):
+                                         out_selected_examples="colbert_data/examples_800k_unique_selected.jsonl",
+                                         out_generation_pairs_file="data/input/64_way/examples_800k_unique.jsonl"):
     out_generate = {}
     out_generate_examples = {}
     ranks = defaultdict(int)
@@ -64,7 +66,7 @@ def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json"
                     debug_print(batch_psgs, psg_id, q_id)
                     nr_debug_prints -= 1
 
-    with jsonlines.open(out_file, "w") as writer:
+    with jsonlines.open(out_generation_pairs_file, "w") as writer:
         writer.write_all(out_generate.values())
 
     with jsonlines.open(out_selected_examples, "w") as writer:
@@ -325,7 +327,7 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
 
 
 def add_tsv_to_examples(relevancy_out_path='data/extracted_relevancy.tsv',
-                        examples_path="colbert_data/examples_800k_unique_raw.jsonl",
+                        examples_path="colbert_data/examples_800k_unique_selected.jsonl",
                         out_examples_path="colbert_data/examples_with_relevancy.jsonl"):
     examples = []
     with jsonlines.open(examples_path) as reader:
@@ -365,8 +367,94 @@ def add_tsv_to_examples(relevancy_out_path='data/extracted_relevancy.tsv',
         writer.write_all(new_examples)
 
 
-def compute_correlation_stats():
-    pass
+def find_all_psg_ids_examples(examples_json):
+    all_psg_ids = set()
+    with jsonlines.open(examples_json) as reader:
+        for example in tqdm(reader, desc="Loading examples", unit="lines", total=nr_in_one_experiment):
+            batch_psgs, _ = zip(*example[2:])
+            all_psg_ids.update(batch_psgs)
+    return all_psg_ids
+
+
+
+def create_collection(qrels='colbert_data/qrels.dev.small.tsv',
+                      examples_json='colbert_data/examples_with_relevancy.jsonl',
+                      out_collection="colbert_data/collection.dev.small_50-25-25.tsv"):
+    """
+    Takes all passages from provided qrels and adds
+    two times more data by adding:
+        25% unseen in examples.json and
+        25% seen in examples.json
+    :return:
+    """
+
+    all_psg_ids = set(collection.keys())
+    print(f"Total passages in collection: {len(all_psg_ids)}")
+
+    examples_seen_ids = find_all_psg_ids_examples(examples_json)
+    print(f"Total passages in examples: {len(examples_seen_ids)}")
+
+    qrels_psg_ids = set()
+    with open(qrels, "r") as file:
+        for line in file:
+            query_id, _, doc_id, _ = line.strip().split("\t")
+            qrels_psg_ids.add(int(doc_id))
+
+    dev_len = len(qrels_psg_ids)
+    print(f"Total passages in qrels: {dev_len}")
+
+    # 25% unseen in examples.json
+    unseen_psg_ids = all_psg_ids - examples_seen_ids - qrels_psg_ids
+    seen_psg_ids = examples_seen_ids - qrels_psg_ids
+    print(f"Sampling 25% from unseen in examples.json: {len(unseen_psg_ids)}")
+    print(f"Sampling 25% from seen in examples.json: {len(seen_psg_ids)}")
+
+    # Sample 25% from unseen in examples.json
+    unseen_psg_ids = list(unseen_psg_ids)
+    seen_psg_ids = list(seen_psg_ids)
+
+    random.seed(42)
+    random.shuffle(unseen_psg_ids)
+    random.shuffle(seen_psg_ids)
+
+    unseen_psg_ids = unseen_psg_ids[:int(len(qrels_psg_ids) * 0.25)]
+    seen_psg_ids = seen_psg_ids[:int(len(qrels_psg_ids) * 0.25)]
+
+    extrated_ids = unseen_psg_ids + seen_psg_ids + list(qrels_psg_ids)
+    assert unique(extrated_ids)
+    print(f"Total passages in new collection: {len(extrated_ids)}")
+
+    # Write the new collection
+    new_collection = [(psg_id, collection[psg_id]) for psg_id in extrated_ids]
+    with open(out_collection, "w") as file:
+        for psg_id, psg in new_collection:
+            file.write(f"{psg_id}\t{psg}\n")
+
+
+def tsv_to_jsonl_extracted(queries,
+                           qrels_file='colbert_data/qrels.dev.small.tsv',
+                           out_generation_pairs_file="data/input/64_way/qrels.dev.small.jsonl"):
+
+    out_generate = {}
+    with open(qrels_file, "r") as file:
+        for line in file:
+            query_id, _, doc_id, _ = line.strip().split("\t")
+            query_id, doc_id = int(query_id), int(doc_id)
+
+            out_generate[query_id] = (
+                {
+                    "q_id": query_id,
+                    "q_text": queries[query_id],
+                    "psg_id": doc_id,
+                    "psg_text": collection[doc_id],
+                    "psg_type": 0
+                }
+            )
+
+    with jsonlines.open(out_generation_pairs_file, "w") as writer:
+        writer.write_all(out_generate.values())
+
+    print(f"Written {len(out_generate.values())} to {out_generation_pairs_file}")
 
 
 def arg_parse():
@@ -382,15 +470,17 @@ def arg_parse():
                         help="Create output TSV files from generated relevancy data.")
     parser.add_argument("--add-tsv-to-examples", action="store_true",
                         help="Stores information about generated extraction scores into examples.json.")
-    parser.add_argument("--splits-correlation", action="store_true",
-                        help="Compare examples.json and splits.")
+    parser.add_argument("--create-collection", action="store_true",
+                        help="Creates smaller collection from the collection.tsv file and queries small.")
+    parser.add_argument("--tsv-to-jsonl-extracted", action="store_true",
+                        help="Converts tsv file to jsonl file compatible for rationale extraction.")
+
 
     return parser.parse_args()
 
 
-def load_queries():
+def load_queries(queries_path="colbert_data/queries.train.tsv"):
     queries = {}
-    queries_path = "colbert_data/queries.train.tsv"
     with open(queries_path, "r") as q_file:
         for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
             q_id, q = line.strip().split("\t")
@@ -432,13 +522,14 @@ if __name__ == "__main__":
     nr_in_one_experiment = nr_reranked_examples / nr_experiments
 
     args = arg_parse()
+    load_data = args.extract_ids or args.create_collection or args.tsv_to_jsonl_extracted
 
-    # Call functions based on the flags
-    if args.extract_ids or args.split_correlation:
+    if load_data:
         qrels = load_qrels()
         queries = load_queries()
         collection = load_collection()
 
+    if args.extract_ids:
         extract_ids_to_extract_relevancy_for()
     if args.unify_triplets_output:
         unify_triplets_output()
@@ -446,5 +537,8 @@ if __name__ == "__main__":
         create_out_tsv()
     if args.add_tsv_to_examples:
         add_tsv_to_examples()
-    if args.split_correlation:
-        compute_correlation_stats()
+    if args.create_collection:
+        create_collection()
+    if args.tsv_to_jsonl_extracted:
+        dev_queries = load_queries("colbert_data/queries.dev.small.tsv")
+        tsv_to_jsonl_extracted(dev_queries)

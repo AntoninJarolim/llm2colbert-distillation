@@ -63,7 +63,7 @@ class ExplanationsDataset(Dataset):
 
     def tokenize_with_spans(self, positive_text, selected_spans):
         # Find spans and extract starts and ends
-        found_spans = find_spans(positive_text, selected_spans)
+        found_spans = text_utils.find_spans(positive_text, selected_spans)
 
         spand_starts = torch.tensor([s['start'] for s in found_spans])
         spand_ends = torch.tensor([s['end'] for s in found_spans])
@@ -85,7 +85,7 @@ class ExplanationsDataset(Dataset):
 
     def decode_list(self, tokens):
         return (
-            tokenize_list(tokens, self.tokenizer)
+            text_utils.tokenize_list(tokens, self.tokenizer)
             if self.decode_positive_as_list
             else None
         )
