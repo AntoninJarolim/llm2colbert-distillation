@@ -301,7 +301,7 @@ def get_args():
     # Data args
     parser.add_argument('--input_data_name', type=str, required=True,
                         help="Filename to generate relevance extraction data.")
-    parser.add_argument('--input_generated_relevance', type=str, required=True,
+    parser.add_argument('--input_generated_relevance', type=str, required=False, default=None,
                         help="TSV file having extracted relevance, just to not generate twice.")
     parser.add_argument('--generate_into_dir', type=str, required=True,
                         help="Dir where output batches and fixes will be.")
@@ -486,6 +486,9 @@ def find_sorted_fix_dirs(generated_data_dir):
 
 def load_already_generated(input_generated_relevance):
     # Key is (q_id, psg_id)
+    if input_generated_relevance is None:
+        return set()
+
     already_generated = set()
     with open(input_generated_relevance) as relevanece_file:
         for line in relevanece_file:
