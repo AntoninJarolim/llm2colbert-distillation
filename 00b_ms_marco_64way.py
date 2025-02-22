@@ -525,10 +525,13 @@ def load_qrels():
     return qrels
 
 
-def remove_no_extractions_from_qrels(
+def remove_no_extractions_from_qrels_and_queries(
         extracted_relevancy_data="data/extracted_relevancy_qrels.dev.small.tsv",
         qrels_data='colbert_data/qrels.dev.small.tsv',
-        qrels_data_out='colbert_data/qrels.dev.small_ex_only.tsv'):
+        qrels_data_out='colbert_data/qrels.dev.small_ex_only.tsv',
+        queries_data='colbert_data/queries.dev.small.tsv',
+        queries_data_out='colbert_data/queries.dev.small_ex_only.tsv'
+):
     """
     loads passage ids  with generated relevancy from extracted_relevancy_data
     and creates new file from qrels_data by writing only
@@ -537,10 +540,12 @@ def remove_no_extractions_from_qrels(
     """
 
     psg_ids = set()
+    query_ids = set()
     with open(extracted_relevancy_data, ) as reader:
         for line in reader:
-            _, psg_id, *_ = line.strip().split("\t")
+            q_id, psg_id, *_ = line.strip().split("\t")
             psg_ids.add(int(psg_id))
+            query_ids.add(int(q_id))
 
     lines_out = []
     with open(qrels_data, "r") as reader:
@@ -553,6 +558,19 @@ def remove_no_extractions_from_qrels(
         writer.writelines(lines_out)
 
     print(f"Written {len(lines_out)} lines to {qrels_data_out}")
+
+    # Write queries with only relevant passages
+    lines_out = []
+    with open(queries_data, "r") as reader:
+        for line in reader:
+            q_id, q = line.strip().split("\t")
+            if int(q_id) in query_ids:
+                lines_out.append(line)
+
+    with open(queries_data_out, "w") as writer:
+        writer.writelines(lines_out)
+
+    print(f"Written {len(lines_out)} lines to {queries_data_out}")
 
 
 if __name__ == "__main__":
@@ -584,4 +602,4 @@ if __name__ == "__main__":
         dev_queries = load_queries("colbert_data/queries.dev.small.tsv")
         tsv_to_jsonl_extracted(dev_queries)
     if args.remove_no_extractions_from_qrels:
-        remove_no_extractions_from_qrels()
+        remove_no_extractions_from_qrels_and_queries()
