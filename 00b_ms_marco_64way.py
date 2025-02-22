@@ -323,6 +323,52 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
 
     validate_out_tsv(relevancy_out_path)
 
+
+def add_tsv_to_examples(relevancy_out_path='data/extracted_relevancy.tsv',
+                        examples_path="colbert_data/examples_800k_unique_raw.jsonl",
+                        out_examples_path="colbert_data/examples_with_relevancy.jsonl"):
+    examples = []
+    with jsonlines.open(examples_path) as reader:
+        for example in tqdm(reader, desc="loading examples", unit="lines", total=nr_in_one_experiment):
+            examples.append(example)
+
+    generated_for_q_id = defaultdict(list)
+    with open(relevancy_out_path, mode='r') as relevancy_out_f:
+        for line in tqdm(relevancy_out_f, desc="loading tsv", unit="lines", total=nr_in_one_experiment):
+            q_id, psg_id, _, *span_list = line.strip().split('\t')
+            q_id, psg_id = int(q_id), int(psg_id)
+
+            generated_for_q_id[q_id].append(psg_id)
+
+    print(f"Unique q_ids: {len(generated_for_q_id)}")
+
+    new_examples = []
+    for example in tqdm(examples, desc="Inserting into examples", unit="lines", total=nr_in_one_experiment):
+        q_id = example[0]
+        generated_psg_ids = generated_for_q_id[q_id]
+
+        # Skip if no generated psg_ids
+        if not generated_psg_ids:
+            continue
+
+        # Validate output
+        batch_psgs, _ = zip(*example[1:])
+        assert all(psg_id in batch_psgs for psg_id in generated_psg_ids), \
+            "Not all generated psg_ids are in the batch"
+
+        assert len(generated_psg_ids) == 1 and generated_psg_ids[0] == example[1][0]
+
+        example.insert(1, generated_psg_ids)
+        new_examples.append(example)
+
+    with jsonlines.open(out_examples_path, mode="w") as writer:
+        writer.write_all(new_examples)
+
+
+def compute_correlation_stats():
+    pass
+
+
 def arg_parse():
     parser = argparse.ArgumentParser(description="Command-line tool to perform various data operations.")
 
@@ -334,6 +380,10 @@ def arg_parse():
                         help="Add triplets to explained triplets data.")
     parser.add_argument("--create-out-tsv", action="store_true",
                         help="Create output TSV files from generated relevancy data.")
+    parser.add_argument("--add-tsv-to-examples", action="store_true",
+                        help="Stores information about generated extraction scores into examples.json.")
+    parser.add_argument("--splits-correlation", action="store_true",
+                        help="Compare examples.json and splits.")
 
     return parser.parse_args()
 
@@ -373,6 +423,7 @@ def load_qrels():
     return qrels
 
 
+
 if __name__ == "__main__":
     # Following constants are used in some following functions
     file_path = "colbert_data/examples.json"
@@ -383,7 +434,7 @@ if __name__ == "__main__":
     args = arg_parse()
 
     # Call functions based on the flags
-    if args.extract_ids:
+    if args.extract_ids or args.split_correlation:
         qrels = load_qrels()
         queries = load_queries()
         collection = load_collection()
@@ -393,3 +444,7 @@ if __name__ == "__main__":
         unify_triplets_output()
     if args.create_out_tsv:
         create_out_tsv()
+    if args.add_tsv_to_examples:
+        add_tsv_to_examples()
+    if args.split_correlation:
+        compute_correlation_stats()
