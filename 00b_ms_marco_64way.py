@@ -433,7 +433,7 @@ def create_collection(qrels='colbert_data/qrels.dev.small.tsv',
 
 def tsv_to_jsonl_extracted(queries,
                            qrels_file='colbert_data/qrels.dev.small.tsv',
-                           out_generation_pairs_file="data/input/64_way/qrels.dev.small.jsonl"):
+                           out_generation_pairs_file="data/input/qrels.dev.small/qrels.dev.small.jsonl"):
 
     out_generate = {}
     with open(qrels_file, "r") as file:
