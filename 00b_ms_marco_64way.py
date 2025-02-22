@@ -149,6 +149,7 @@ def unify_triplets_output(triplets_explained='data/triplets_explained.jsonl',
 
     print(f"Done counter: {done_counter}")
 
+
 def write_tsv_line(relevancy_out_f, q_id, psg_id, psg_type, span_list):
     # tsv out file format: `<q_id> <psg_id> <psg_type> <ERS1> <ERS2> ...`
     # ERS - extracted relevancy string
@@ -174,6 +175,7 @@ def validate_out_tsv(relevancy_out_path):
 
     print("Validation of out tsv passed.")
 
+
 def find_success(text, spans):
     # Ensure that the spans are not valid at the start
     try:
@@ -182,8 +184,10 @@ def find_success(text, spans):
     except AssertionError:
         return False
 
+
 def two_spans_diff(span1, span2):
     return sum(c1 != c2 for c1, c2 in zip(span1, span2)) + abs(len(span1) - len(span2))
+
 
 def heuristic_finding(text, span):
     """Tries to modify as little as possible chars in span_text so it is in text after modification"""
@@ -210,7 +214,6 @@ def try_find_spans(text, spans):
     # Ensure that the spans are not valid at the start
     assert not find_success(text, spans)
 
-
     # Try to find the spans with modified text
     modified_spans = []
     for span in spans:
@@ -225,9 +228,12 @@ def try_find_spans(text, spans):
     return None
 
 
-def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
-                   generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl",
-                   relevancy_out_path='data/extracted_relevancy.tsv'):
+# def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
+#                    generate_relevancy_ids="data/input/64_way/examples_800k_unique.jsonl",
+#                    relevancy_out_path='data/extracted_relevancy.tsv'):
+def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs/qrels.dev.small',
+                   generate_relevancy_ids="data/input/qrels.dev.small/qrels.dev.small.jsonl",
+                   relevancy_out_path='data/extracted_relevancy_qrels.dev.small.tsv'):
     # indexed by (q_id, psg_id) tuple
     tsv_out = {}
     with jsonlines.open(generate_relevancy_ids) as reader:
@@ -253,7 +259,6 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                 if tsv_out[generated_key][0] != -1:
                     generated_twice_counter += 1
                     continue
-
 
                 if 'extraction_error' in out_generated and out_generated['extraction_error']:
                     # LLM unable to select something which is in text
@@ -292,7 +297,7 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
                 write_tsv_line(relevancy_out_f, q_id, psg_id, out_psg_type, span_list)
 
     total_to_generate = error_counter[0][-1] + error_counter[1][-1]
-    total_generated = nr_in_one_experiment - total_to_generate
+    total_generated = len(tsv_out) - total_to_generate
     total_failed = error_counter[0][-3] + error_counter[1][-3]
     total_nothing = error_counter[0][-2] + error_counter[1][-2]
 
@@ -300,17 +305,24 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs',
     any_top_one = sum(error_counter[1].values())
 
     print(f"Stats for {relevancy_out_path}")
-    print(f"\t Generated + not yet generated / total:\t {total_generated:.0f}+{total_to_generate}/{nr_in_one_experiment:.0f}")
+    print(
+        f"\t Generated + not yet generated / total:\t {total_generated:.0f}+{total_to_generate}/{nr_in_one_experiment:.0f}")
     print(f"\t err - generated twice: {generated_twice_counter}")
     print("\t err - not alphanumeric in selected spans: ", error_counter[0][-4] + error_counter[1][-4])
 
     print(f"\t err - LLM failed to generate correct extraction span: {total_failed}")
-    print(f"\t\t ms-marco annotated: {error_counter[0][-3]}/{any_ms_marco} ({error_counter[0][-3] / any_ms_marco:.4f})")
-    print(f"\t\t Top-1 retrieved: {error_counter[1][-3]}/{any_top_one} ({error_counter[1][-3] / any_top_one:.4f})")
+    if any_ms_marco > 0:
+        print(
+            f"\t\t ms-marco annotated: {error_counter[0][-3]}/{any_ms_marco} ({error_counter[0][-3] / any_ms_marco:.4f})")
+    if any_top_one > 0:
+        print(f"\t\t Top-1 retrieved: {error_counter[1][-3]}/{any_top_one} ({error_counter[1][-3] / any_top_one:.4f})")
 
     print(f"\t err - LLM selected nothing: {total_nothing}")
-    print(f"\t\t ms-marco annotated: {error_counter[0][-2]}/{any_ms_marco} ({error_counter[0][-2] / any_ms_marco:.4f})")
-    print(f"\t\t Top-1 retrieved: {error_counter[1][-2]}/{any_top_one} ({error_counter[1][-2] / any_top_one:.4f})")
+    if any_ms_marco > 0:
+        print(
+            f"\t\t ms-marco annotated: {error_counter[0][-2]}/{any_ms_marco} ({error_counter[0][-2] / any_ms_marco:.4f})")
+    if any_top_one > 0:
+        print(f"\t\t Top-1 retrieved: {error_counter[1][-2]}/{any_top_one} ({error_counter[1][-2] / any_top_one:.4f})")
     print()
 
     print(f"\t modified MS marco - {error_counter[0][2]}")
@@ -376,7 +388,6 @@ def find_all_psg_ids_examples(examples_json):
     return all_psg_ids
 
 
-
 def create_collection(qrels='colbert_data/qrels.dev.small.tsv',
                       examples_json='colbert_data/examples_with_relevancy.jsonl',
                       out_collection="colbert_data/collection.dev.small_50-25-25.tsv"):
@@ -434,7 +445,6 @@ def create_collection(qrels='colbert_data/qrels.dev.small.tsv',
 def tsv_to_jsonl_extracted(queries,
                            qrels_file='colbert_data/qrels.dev.small.tsv',
                            out_generation_pairs_file="data/input/qrels.dev.small/qrels.dev.small.jsonl"):
-
     out_generate = {}
     with open(qrels_file, "r") as file:
         for line in file:
@@ -474,7 +484,8 @@ def arg_parse():
                         help="Creates smaller collection from the collection.tsv file and queries small.")
     parser.add_argument("--tsv-to-jsonl-extracted", action="store_true",
                         help="Converts tsv file to jsonl file compatible for rationale extraction.")
-
+    parser.add_argument("--remove-no-extractions-from-qrels", action="store_true",
+                        help="Removes passages with not generated extractions from qrels.")
 
     return parser.parse_args()
 
@@ -497,6 +508,7 @@ def load_collection():
             collection[int(p_id)] = d
     return collection
 
+
 def load_qrels():
     # Load ms marco GT data
     q_rels_path = "colbert_data/qrels.train.tsv"
@@ -512,6 +524,35 @@ def load_qrels():
                 qrels[query_id].append(doc_id)
     return qrels
 
+
+def remove_no_extractions_from_qrels(
+        extracted_relevancy_data="data/extracted_relevancy_qrels.dev.small.tsv",
+        qrels_data='colbert_data/qrels.dev.small.tsv',
+        qrels_data_out='colbert_data/qrels.dev.small_ex_only.tsv'):
+    """
+    loads passage ids  with generated relevancy from extracted_relevancy_data
+    and creates new file from qrels_data by writing only
+    lines with psg_id in the extracted_relevancy_data
+    :return:
+    """
+
+    psg_ids = set()
+    with open(extracted_relevancy_data, ) as reader:
+        for line in reader:
+            _, psg_id, *_ = line.strip().split("\t")
+            psg_ids.add(int(psg_id))
+
+    lines_out = []
+    with open(qrels_data, "r") as reader:
+        for line in reader:
+            _, _, psg_id, _ = line.strip().split("\t")
+            if int(psg_id) in psg_ids:
+                lines_out.append(line)
+
+    with open(qrels_data_out, "w") as writer:
+        writer.writelines(lines_out)
+
+    print(f"Written {len(lines_out)} lines to {qrels_data_out}")
 
 
 if __name__ == "__main__":
@@ -542,3 +583,5 @@ if __name__ == "__main__":
     if args.tsv_to_jsonl_extracted:
         dev_queries = load_queries("colbert_data/queries.dev.small.tsv")
         tsv_to_jsonl_extracted(dev_queries)
+    if args.remove_no_extractions_from_qrels:
+        remove_no_extractions_from_qrels()
