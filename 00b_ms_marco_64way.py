@@ -9,8 +9,8 @@ import text_utils
 import random
 
 
-def extract_ids_to_extract_relevancy_for(input_file="colbert_data/examples.json",
-                                         out_selected_examples="colbert_data/examples_800k_unique_selected.jsonl",
+def extract_ids_to_extract_relevancy_for(input_file="colbert_data/training/examples.json",
+                                         out_selected_examples="colbert_data/training/examples_800k_unique_selected.jsonl",
                                          out_generation_pairs_file="data/input/64_way/examples_800k_unique.jsonl"):
     out_generate = {}
     out_generate_examples = {}
@@ -339,8 +339,8 @@ def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs/qrels.dev.s
 
 
 def add_tsv_to_examples(relevancy_out_path='data/extracted_relevancy.tsv',
-                        examples_path="colbert_data/examples_800k_unique_selected.jsonl",
-                        out_examples_path="colbert_data/examples_with_relevancy.jsonl"):
+                        examples_path="colbert_data/training/examples_800k_unique_selected.jsonl",
+                        out_examples_path="colbert_data/training/examples_with_relevancy.jsonl"):
     examples = []
     with jsonlines.open(examples_path) as reader:
         for example in tqdm(reader, desc="loading examples", unit="lines", total=nr_in_one_experiment):
@@ -388,9 +388,9 @@ def find_all_psg_ids_examples(examples_json):
     return all_psg_ids
 
 
-def create_collection(qrels='colbert_data/qrels.dev.small.tsv',
-                      examples_json='colbert_data/examples_with_relevancy.jsonl',
-                      out_collection="colbert_data/collection.dev.small_50-25-25.tsv"):
+def create_collection(qrels='colbert_data/evaluation/qrels.dev.small.tsv',
+                      examples_json='colbert_data/training/examples_with_relevancy.jsonl',
+                      out_collection="colbert_data/evaluation/collection.dev.small_50-25-25.tsv"):
     """
     Takes all passages from provided qrels and adds
     two times more data by adding:
@@ -490,7 +490,7 @@ def arg_parse():
     return parser.parse_args()
 
 
-def load_queries(queries_path="colbert_data/queries.train.tsv"):
+def load_queries(queries_path="colbert_data/training/queries.train.tsv"):
     queries = {}
     with open(queries_path, "r") as q_file:
         for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
@@ -500,7 +500,7 @@ def load_queries(queries_path="colbert_data/queries.train.tsv"):
 
 
 def load_collection():
-    queries_path = "colbert_data/collection.tsv"
+    queries_path = "colbert_data/training/collection.tsv"
     collection = defaultdict(str)
     with open(queries_path, "r") as coll_file:
         for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
@@ -511,7 +511,7 @@ def load_collection():
 
 def load_qrels():
     # Load ms marco GT data
-    q_rels_path = "colbert_data/qrels.train.tsv"
+    q_rels_path = "colbert_data/evaluation/qrels.train.tsv"
     qrels = defaultdict(list)
     with open(q_rels_path, "r") as file:
         for line in file:
