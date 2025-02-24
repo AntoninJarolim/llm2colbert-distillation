@@ -428,17 +428,21 @@ def create_collection(qrels='colbert_data/evaluation/qrels.dev.small.tsv',
     random.shuffle(unseen_psg_ids)
     random.shuffle(seen_psg_ids)
 
-    unseen_psg_ids = unseen_psg_ids[:int(len(qrels_psg_ids) * 0.25)]
-    seen_psg_ids = seen_psg_ids[:int(len(qrels_psg_ids) * 0.25)]
+    unseen_psg_ids = unseen_psg_ids[:int(dev_len * 0.5)]
+    seen_psg_ids = seen_psg_ids[:int(dev_len * 0.5)]
+
+    assert set(unseen_psg_ids) & set(seen_psg_ids) & qrels_psg_ids == set()
 
     extrated_ids = unseen_psg_ids + seen_psg_ids + list(qrels_psg_ids)
     assert unique(extrated_ids)
     print(f"Total passages in new collection: {len(extrated_ids)}")
+    assert len(extrated_ids) in [dev_len * 2 - 1, dev_len * 2, dev_len * 2 + 1], \
+        f"{len(extrated_ids)} != {dev_len * 2}"
 
     # Write the new collection
-    new_collection = [(psg_id, collection[psg_id]) for psg_id in extrated_ids]
+    new_collection = {psg_id: collection[psg_id] for psg_id in extrated_ids}
     with open(out_collection, "w") as file:
-        for psg_id, psg in new_collection:
+        for psg_id, psg in new_collection.items():
             file.write(f"{psg_id}\t{psg}\n")
 
 
