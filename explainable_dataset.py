@@ -1,4 +1,6 @@
 import json
+from json import JSONDecodeError
+
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -7,15 +9,27 @@ import text_utils
 
 class ExplanationsDataset(Dataset):
 
-    def __init__(self, file_path, tokenizer, decode_positive_as_list=False, error_on_invalid=False):
+    def __init__(self, file_path, tokenizer,
+                 decode_positive_as_list=False, error_on_invalid=False,
+                 psg_key='psg_text', q_key='q_text'):
+        self.psg_key = psg_key
+        self.q_key = q_key
         self.invalid_indexes = []
         self.error_on_invalid = error_on_invalid
         self.decode_positive_as_list = decode_positive_as_list
         self.tokenizer = tokenizer
         self.file_path = file_path
         # Load the entire JSONL file into memory
-        with open(file_path, 'r') as f:
-            self.data = [json.loads(line) for line in f]
+        with open(file_path, 'r', encoding='utf-8') as f:
+            def decode_line(line):
+                try:
+                    return json.loads(line)
+                except JSONDecodeError as e:
+                    print(e)
+                    print(line)
+
+            self.data = [decode_line(line) for line in f]
+
 
     def __len__(self):
         return len(self.data)
@@ -30,8 +44,10 @@ class ExplanationsDataset(Dataset):
         """
         sample: dict = self.data[idx]
         try:
-            tokenized_positive, binary_rationales = self.tokenize_with_spans(sample['psg_text'],
-                                                                             sample['selected_spans'])
+            tokenized_positive, binary_rationales = self.tokenize_with_spans(
+                                               sample[self.psg_key], sample['selected_spans']
+                                                        )
+
         except AssertionError as e:
             if self.error_on_invalid:
                 raise e
@@ -40,8 +56,8 @@ class ExplanationsDataset(Dataset):
             return None, None
 
         return {
-            'q_text': sample['q_text'],
-            'psg_text': sample['psg_text'],
+            self.q_key: sample[self.q_key],
+            self.psg_key: sample[self.psg_key],
             'tokenized_positive': tokenized_positive,
             'tokenized_positive_decoded': self.decode_list(tokenized_positive),
             'rationales': binary_rationales,
@@ -100,14 +116,16 @@ if __name__ == "__main__":
     # file_path = 'data/35_random_samples_llama3.1:70b-instruct-q4_0.jsonl'
     # file_path = 'data/35_random_samples_llama2:13b.jsonl'
     # file_path = 'data/gemma2:27b-instruct-q8_0.jsonl'
-    file_path = 'data/triplets_explained.jsonl'
+    # file_path = 'data/triplets_explained.jsonl'
+    file_path = 'data/ms-marco-human-explained/out_1_explained.jsonl'
 
     tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
-    dataset = ExplanationsDataset(file_path, tokenizer, decode_positive_as_list=True)
+    dataset = ExplanationsDataset(file_path, tokenizer, decode_positive_as_list=True,
+                                psg_key='passage', q_key='query')
 
     # Iterate through the data
     for i in tqdm(range(len(dataset))):
         d = dataset[i]
-        # print(d)
+        print(d)
 
     print(f"Invalid indexes: {dataset.invalid_indexes}")
