@@ -246,9 +246,17 @@ def try_find_spans(text, spans):
     return None
 
 
+def write_and_validate(tsv_out, relevancy_out_path):
+    with open(relevancy_out_path, mode='w') as relevancy_out_f:
+        for (q_id, psg_id), span_list in tsv_out.items():
+            write_tsv_line(relevancy_out_f, q_id, psg_id, 0, span_list)
+
+    validate_out_tsv(relevancy_out_path)
+
+
 def create_out_tsv_human(
-        # for_dataset='ms-marco-human-explained'
-        for_dataset='accuracy_dataset'
+        for_dataset='ms-marco-human-explained'
+        # for_dataset='accuracy_dataset'
 ):
     if for_dataset == 'ms-marco-human-explained':
         generation_out_dir = 'data/extracted_relevancy_outs/ms-marco-human-explained'
@@ -259,64 +267,76 @@ def create_out_tsv_human(
     else:
         raise ValueError("Unknown dataset")
 
-    merge_datafile_name = 'out_all_explained.jsonl'
     shared_data_counter = 0
     collection_queries = {}
     collection_passages = {}
-    tsv_out = defaultdict(list)
+    tsv_out_all = defaultdict(list)
 
-    for generation_out_file in os.listdir(generation_out_dir):
-        if not generation_out_file.endswith(".jsonl"):
-            print(f"Skipping {generation_out_file}")
-            continue
+    def get_valid_out_files(directory):
+        out_files = []
+        for directory in os.listdir(directory):
+            if not generation_out_file.endswith(".jsonl"):
+                print(f"Skipping {generation_out_file}")
+                continue
+            out_files.append(generation_out_file)
+        return out_files
 
-        if generation_out_file == merge_datafile_name:
-            continue
+    generation_out_files = get_valid_out_files(generation_out_dir)
+    for annotator_id, generation_out_file in enumerate(generation_out_files):
+        # if generation_out_file == merge_datafile_name:
+        #     continue
 
         out_file_path = os.path.join(generation_out_dir, generation_out_file)
+
         # Read the generated relevancy data in one file
         with jsonlines.open(out_file_path) as out_reader:
+            tsv_out_single = defaultdict(list)  # indexed by (q_id, psg_id) tuple
+
             for out_generated in out_reader:
                 generated_key = out_generated['q_id'], out_generated['psg_id']
 
                 collection_queries[out_generated['q_id']] = out_generated['q_id']  # out_generated['query']
                 collection_passages[out_generated['psg_id']] = out_generated['psg_id']  # out_generated['passage']
 
-                if generated_key in tsv_out:
+                if generated_key in tsv_out_all:
                     shared_data_counter += 1
 
                 for span in out_generated['selected_spans']:
                     if for_dataset == 'accuracy_dataset':
                         span = span['text']
-                    tsv_out[generated_key].append(span)
 
-                if len(out_generated['selected_spans']) == 0:
-                    tsv_out[generated_key].append(out_generated['psg_text'][:50])
+                    # Append to list that merges spans from all annotators
+                    tsv_out_all[generated_key].append(span)
 
-    with open(relevancy_out_path, mode='w') as relevancy_out_f:
-        for (q_id, psg_id), span_list in tsv_out.items():
-            write_tsv_line(relevancy_out_f, q_id, psg_id, 0, span_list)
+                    # Append to list that merges spans for the same annotator
+                    tsv_out_single[generated_key].append(out_generated['selected_spans'])
+
+            # Use relevancy_out_path to create a unique file for each annotator
+            relevancy_out_path_one = relevancy_out_path[:-4] + f"_{annotator_id}.tsv"
+            write_and_validate(tsv_out_single, relevancy_out_path_one)
+
+    write_and_validate(tsv_out_all, relevancy_out_path)
 
     # Merge jsonl data so it can be written to jsonl file
-    merged_jsonl_data = []
-    for (q_id, psg_id), span_list in tsv_out.items():
-        out_line = {
-            'q_id': q_id,
-            'query': collection_queries[q_id],
-            'psg_id': psg_id,
-            'passage': collection_passages[psg_id],
-            'selected_spans': span_list
-        }
-        merged_jsonl_data.append(out_line)
+    # merged_jsonl_data = []
+    # for (q_id, psg_id), span_list in tsv_out.items():
+    #     out_line = {
+    #         'q_id': q_id,
+    #         'query': collection_queries[q_id],
+    #         'psg_id': psg_id,
+    #         'passage': collection_passages[psg_id],
+    #         'selected_spans': span_list
+    #     }
+    #     merged_jsonl_data.append(out_line)
 
-    relevancy_out_json = os.path.join(generation_out_dir, merge_datafile_name)
-    with jsonlines.open(relevancy_out_json, mode='w') as merged_jsonl:
-        merged_jsonl.write_all(merged_jsonl_data)
+    # relevancy_out_json = os.path.join(generation_out_dir, merge_datafile_name)
+    # with jsonlines.open(relevancy_out_json, mode='w') as merged_jsonl:
+    #     merged_jsonl.write_all(merged_jsonl_data)
 
     print(f"Shared number of data: {shared_data_counter}")
-    print(f"Number of data in tsv: {len(tsv_out)}")
+    print(f"Number of data in tsv: {len(tsv_out_all)}")
 
-    validate_out_tsv(relevancy_out_path)
+
 
 
 # def create_out_tsv(generation_out_dir='data/extracted_relevancy_outs/800k_unique',
