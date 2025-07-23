@@ -5,7 +5,8 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
-import text_utils
+from utils import text_utils
+
 
 class ExplanationsDataset(Dataset):
 

@@ -5,16 +5,14 @@ from collections import defaultdict
 
 import jsonlines
 from boltons.iterutils import unique
-from numpy.ma.core import max_filler
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from ftfy import fix_text
-import text_utils
+from utils import text_utils
 import random
 import seaborn as sns
 import matplotlib.pyplot as plt
-from pathlib import Path
 
 sns.set_theme(style="whitegrid")
 
@@ -271,20 +269,26 @@ def create_out_tsv_human(
     collection_queries = {}
     collection_passages = {}
     tsv_out_all = defaultdict(list)
+    merge_datafile_name = 'out_all_explained.jsonl'
+
 
     def get_valid_out_files(directory):
         out_files = []
-        for directory in os.listdir(directory):
-            if not generation_out_file.endswith(".jsonl"):
-                print(f"Skipping {generation_out_file}")
+        for file in os.listdir(directory):
+
+            if not file.endswith(".jsonl"):
+                print(f"Skipping {file}")
                 continue
-            out_files.append(generation_out_file)
+
+            if file == merge_datafile_name:
+                continue
+
+            out_files.append(file)
         return out_files
 
     generation_out_files = get_valid_out_files(generation_out_dir)
+
     for annotator_id, generation_out_file in enumerate(generation_out_files):
-        # if generation_out_file == merge_datafile_name:
-        #     continue
 
         out_file_path = os.path.join(generation_out_dir, generation_out_file)
 
@@ -309,7 +313,7 @@ def create_out_tsv_human(
                     tsv_out_all[generated_key].append(span)
 
                     # Append to list that merges spans for the same annotator
-                    tsv_out_single[generated_key].append(out_generated['selected_spans'])
+                    tsv_out_single[generated_key].append(span)
 
             # Use relevancy_out_path to create a unique file for each annotator
             relevancy_out_path_one = relevancy_out_path[:-4] + f"_{annotator_id}.tsv"
