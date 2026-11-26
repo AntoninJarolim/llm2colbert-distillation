@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 from collections import defaultdict
 
 import jsonlines
@@ -9,6 +10,8 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from ftfy import fix_text
+
+from extract_relevancy.ExtractedRelReader import ExtractedRelevancyReader
 from utils import text_utils
 import random
 import seaborn as sns
@@ -174,8 +177,6 @@ def write_tsv_line(relevancy_out_f, q_id, psg_id, psg_type, span_list):
 
 
 def validate_out_tsv(relevancy_out_path):
-    collection = load_collection()
-
     with open(relevancy_out_path, mode='r') as relevancy_out_f:
         for line in relevancy_out_f:
             q_id, psg_id, psg_type, *span_list = line.strip().split('\t')
@@ -515,34 +516,81 @@ def create_collection_from_randon_samples(
         # for_dataset='ms-marco-human-explained'
         for_dataset='accuracy_dataset'
 ):
+
+    data = load_samples_from_ext_outs(for_dataset)
+    save_collection_queries(data, for_dataset)
+
+
+def get_file_ids(file_path):
+    data = []
+    for qid, pid, t, spans in ExtractedRelevancyReader(file_path):
+        data.append({
+            'psg_id': pid,
+            'q_id': qid,
+        })
+    return data
+
+def filename_to_collection_name(extracted_relevancy_name):
+    m = re.match(r"^extracted_relevancy_(.+)\.tsv$", extracted_relevancy_name)
+    return m.group(1)
+
+
+def get_data_from_ids(file_id_data):
+    data = []
+    for d in file_id_data:
+        data.append({
+            'psg_id': d['psg_id'],
+            'q_id': d['q_id'],
+            'passage': collection[int(d['psg_id'])],
+            'query': queries[int(d['q_id'])],
+        })
+    return data
+
+
+def create_human_explained_collection(filter_keyword="human"):
+    data_path = 'data'
+
+    process_files = []
+    for file in os.listdir(data_path):
+        if filter_keyword in file:
+            process_files.append(file)
+
+    for file in process_files:
+        file_path = os.path.join(data_path, file)
+        collection_name = filename_to_collection_name(file)
+
+        file_id_data = get_file_ids(file_path)
+        collection_data = get_data_from_ids(file_id_data)
+        save_collection_queries(collection_data, collection_name)
+
+
+def save_collection_queries(data, dataset_name):
+    out_queries = f'colbert_data/evaluation/queries.eval.{dataset_name}.tsv'
+    out_collection = f'colbert_data/evaluation/collection.{dataset_name}.tsv'
+    out_collection_td = f'colbert_data/evaluation/collection.{dataset_name}.translate_dict.json'
+    psg_key = 'passage' if 'human-explained' in dataset_name else 'psg_text'
+    query_key = 'query' if 'human-explained' in dataset_name else 'q_text'
+    new_collection = {}
+    new_queries = {}
+    for d in data:
+        new_collection[d['psg_id']] = d[psg_key]
+        new_queries[d['q_id']] = d[query_key]
+    with open(out_queries, "w") as file:
+        for q_id, q in new_queries.items():
+            file.write(f"{q_id}\t{q}\n")
+    write_new_collection(new_collection, out_collection, out_collection_td)
+    print('done')
+
+
+def load_samples_from_ext_outs(for_dataset):
     samples = f'data/extracted_relevancy_outs/{for_dataset}'
-    out_queries = f'colbert_data/evaluation/queries.eval.{for_dataset}.tsv'
-    out_collection = f'colbert_data/evaluation/collection.{for_dataset}.tsv'
-    out_collection_td = f'colbert_data/evaluation/collection.{for_dataset}.translate_dict.json'
-
-    psg_key = 'passage' if for_dataset == 'ms-marco-human-explained' else 'psg_text'
-    query_key = 'query' if for_dataset == 'ms-marco-human-explained' else 'q_text'
-
     data = []
     # for file in files open and load jsonl to data
     for file in os.listdir(samples):
         with jsonlines.open(os.path.join(samples, file)) as reader:
             for line in reader:
                 data.append(line)
-
-    new_collection = {}
-    new_queries = {}
-
-    for d in data:
-        new_collection[d['psg_id']] = d[psg_key]
-        new_queries[d['q_id']] = d[query_key]
-
-    with open(out_queries, "w") as file:
-        for q_id, q in new_queries.items():
-            file.write(f"{q_id}\t{q}\n")
-
-    write_new_collection(new_collection, out_collection, out_collection_td)
-    print('done')
+    return data
 
 
 def create_collection_from_qrels(
@@ -609,6 +657,9 @@ def write_new_collection(new_collection_items, out_collection_path, out_trans_di
 
     with open(out_collection_path, "w") as file:
         for line_idx, (psg_id, psg) in enumerate(new_collection_items.items()):
+            if len(psg) == 0:
+                raise ValueError(f"Empty passage for id {psg_id}")
+
             file.write(f"{line_idx}\t{psg}\n")
             translate_dict[line_idx] = psg_id
 
@@ -640,17 +691,26 @@ def tsv_to_jsonl_extracted(queries,
     print(f"Written {len(out_generate.values())} to {out_generation_pairs_file}")
 
 
-def load_queries(queries_path="colbert_data/training/queries.train.tsv"):
+def load_queries():
+    queries_paths = [
+        "colbert_data/training/queries.train.tsv",
+        "colbert_data/evaluation/queries.dev.tsv",
+        "colbert_data/evaluation/queries.eval.tsv",
+    ]
     queries = {}
-    with open(queries_path, "r") as q_file:
-        for line in tqdm(q_file, desc="Loading queries", unit="lines", total=808731):
-            q_id, q = line.strip().split("\t")
-            queries[int(q_id)] = q
+    for queries_path in queries_paths:
+        with open(queries_path, "r") as q_file:
+            for line in tqdm(q_file, desc="Loading queries", unit="lines"):
+                q_id, q = line.strip().split("\t")
+                q_id = int(q_id)
+                if q_id in queries:
+                    raise ValueError(f"Duplicate query id {q_id}")
+                queries[q_id] = q
     return queries
 
 
 def load_collection(collection_path="colbert_data/training/collection.tsv"):
-    collection = defaultdict(str)
+    collection = {}
     with open(collection_path, "r") as coll_file:
         for line in tqdm(coll_file, desc="Loading collection", unit="lines", total=8841823):
             p_id, d = line.strip().split("\t")
@@ -1149,7 +1209,8 @@ if __name__ == "__main__":
             args.extract_ids or
             args.create_collection_from_qrels or
             args.tsv_to_jsonl_extracted or
-            args.unify_triplets_output
+            args.unify_triplets_output or
+            args.create_out_tsv
     )
 
     load_data_dev = (
@@ -1177,8 +1238,9 @@ if __name__ == "__main__":
     if args.create_out_tsv:
         # create_out_tsv()
         create_out_tsv_human()  # if you want human evaluated dataset (without errors etc.)
-        # don't forget to call create_collection_from_randon_samples
         # create_collection_from_randon_samples()
+        create_human_explained_collection()
+        # don't forget to call create_collection_from_randon_samples
     if args.add_tsv_to_examples:
         add_tsv_to_examples()
     if args.create_collection_from_qrels:
