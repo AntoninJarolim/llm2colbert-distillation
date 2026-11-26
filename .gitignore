@@ -2,3 +2,6 @@ data/
 .idea/
 .env
 notebooks/.ipynb_checkpoints
+__pycache__/
+logs/
+colbert_data
